@@ -1,0 +1,101 @@
+// ============================================================
+//  Firebase Security Rules — Firestore
+//  部署指令：firebase deploy --only firestore:rules
+//
+//  資料結構：
+//    /predictions/{docId}   — 賽事預測（按 tier 分級）
+//    /history/{docId}       — 歷史開獎（公開）
+//    /users/{uid}           — 用戶資料（個人私有）
+// ============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ──────────────────────────────────────────────────────────
+    // 輔助函式
+    // ──────────────────────────────────────────────────────────
+
+    // 是否已登入
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // 是否為資源本人（uid 匹配）
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // 是否已通過 App Check（確認是真實 App 發出的請求）
+    function passedAppCheck() {
+      return request.app != null;
+    }
+
+    // 是否為 VIP 用戶（從 users 文件讀取）
+    function isVIP() {
+      return isSignedIn()
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isVIP == true;
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // /history — 歷史比賽結果（完全公開讀取）
+    // ──────────────────────────────────────────────────────────
+    match /history/{docId} {
+      // 所有人可讀（包括未登入），但必須通過 App Check 驗證為真實 App
+      allow read: if passedAppCheck();
+      // 只有後端（Firebase Admin SDK）可以寫，客戶端一律禁止
+      allow write: if false;
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // /predictions — 賽事預測（按 tier 分級保護）
+    //
+    //   文件結構中必須包含 tier 欄位：
+    //     "public"  → 任何人可讀（通過 App Check）
+    //     "member"  → 需要登入
+    //     "vip"     → 需要 isVIP == true
+    // ──────────────────────────────────────────────────────────
+    match /predictions/{docId} {
+      allow read: if passedAppCheck()
+          && (
+            // 公開預測：只需 App Check（登入者也可）
+            resource.data.tier == 'public'
+            ||
+            // 一般預測：需要登入
+            (resource.data.tier == 'member' && isSignedIn())
+            ||
+            // 高勝率 VIP 預測：需要 VIP 身份
+            (resource.data.tier == 'vip' && isVIP())
+          );
+      // 客戶端禁止寫入
+      allow write: if false;
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // /users/{uid} — 用戶個人資料
+    // ──────────────────────────────────────────────────────────
+    match /users/{uid} {
+      // 只有本人可以讀自己的資料（需通過 App Check）
+      allow read: if passedAppCheck() && isOwner(uid);
+
+      // 本人可以更新部分欄位（禁止自行修改 isVIP）
+      allow update: if isOwner(uid)
+          && !('isVIP' in request.resource.data.diff(resource.data).affectedKeys());
+
+      // 新用戶建立自己的文件（uid 必須與 auth.uid 匹配）
+      allow create: if isOwner(uid)
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.isVIP == false; // 禁止自行設定 VIP
+
+      // 不允許任何人刪除用戶文件
+      allow delete: if false;
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // 預設：封鎖所有其他集合的讀寫
+    // ──────────────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

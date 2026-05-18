@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter analyze *)",
+      "WebFetch(domain:www.playsport.cc)",
+      "Bash(grep -v \"^$\")",
+      "Bash(awk -F: '$2 >= 3000 && $2 <= 3250')",
+      "Bash(grep -n \"^  Future\\\\|^  \\\\w.*{$\\\\|^  MatchPrediction\\\\|coreInjuryDetails\\\\|injuryDetail\" \"/Users/boshianghuang/Desktop/my_first_app/my app/pang pang/lib/services/pang_pang_sports_service.dart\")",
+      "Bash(awk -F: '$2 >= 2900 && $2 <= 3260')",
+      "Bash(curl -s \"https://www.pilio.idv.tw/lto539/sql23.asp\")",
+      "Bash(grep -v \"^Downloading\\\\|^  _\\\\|^Got dep\\\\|packages have newer\\\\|Try \\\\`flutter\")",
+      "Bash(flutter build *)"
+    ]
+  }
+}
