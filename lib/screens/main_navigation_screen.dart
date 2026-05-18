@@ -4,6 +4,7 @@ import 'latest_matches_screen.dart';
 import 'lottery_screen.dart';
 import 'bingo_screen.dart';
 import 'chart_analysis_screen.dart';
+import 'unified_prediction_screen.dart';
 
 class MainNavigationScreen extends StatefulWidget {
   const MainNavigationScreen({super.key});
@@ -20,7 +21,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     HomeScreen(),
     LotteryScreen(),
     BingoScreen(),
-    ChartAnalysisScreen(),
+    UnifiedPredictionScreen(),
   ];
 
   @override
@@ -52,8 +53,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             label: '台灣賓果',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.bar_chart_rounded),
-            label: '圖表分析',
+            icon: Icon(Icons.sparkles),
+            label: '統合預測',
           ),
         ],
       ),
