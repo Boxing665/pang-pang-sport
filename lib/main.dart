@@ -129,7 +129,13 @@ class _DisclaimerWrapperState extends State<_DisclaimerWrapper> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                   ),
-                  onPressed: () => Navigator.of(ctx).pop(),
+                  onPressed: () {
+  Navigator.pushReplacement(
+    context,
+    MaterialPageRoute(builder: (context) => const PasswordLockScreen()),
+  );
+},
+
                   child: const Text(
                     '我已了解，進入應用',
                     style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
@@ -219,7 +225,12 @@ class _PasswordLockScreenState extends State<PasswordLockScreen> {
     }
     
     // 🔑 解鎖成功後，直接進入你原本的免責聲明主畫面
-    return const Scaffold(body: Center(child: Text("解鎖成功！", style: TextStyle(color: Colors.white))));
+// 👈 點了免責聲明的同意後，不要直接進系統，改成切換到密碼鎖！
+Navigator.pushReplacement(
+  context,
+  MaterialPageRoute(builder: (context) => const PasswordLockScreen()),
+);
+
 
  
   }
