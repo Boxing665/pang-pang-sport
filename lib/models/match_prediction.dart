@@ -35,6 +35,8 @@ class MatchPrediction {
     this.marketVolumePressure = 0.0,
     this.isDefensiveSwitchLikely = false,
     this.topScores = const [],
+    this.aiTotalExpected = 0.0,
+    this.predictedMargin = 0.0,
   });
 
   final int predictedHomeScore;
@@ -105,4 +107,10 @@ class MatchPrediction {
 
   /// 泊松分佈機率最高前 3 組比分（蒙地卡羅模擬結果）
   final List<({int h, int a, double prob})> topScores;
+
+  /// AI 模型（未經市場錨定）預測總得分，用於與盤口大小分做比較
+  final double aiTotalExpected;
+
+  /// 預測勝分差（正值 = 主隊領先）：棒球/籃球用勝率差 × 比例係數推算
+  final double predictedMargin;
 }

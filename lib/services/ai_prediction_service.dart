@@ -151,11 +151,24 @@ class AiPredictionService {
   // 自我學習：各運動校正後的訊號權重快取
   final _weightCache = <String, Map<String, double>>{};
 
-  /// 在 app 啟動或 resume 時呼叫：背景執行賽果拉取 + 權重校正
+  /// 在 app 啟動或 resume 時呼叫：背景執行賽果拉取 + 權重校正 + 自適應策略注入
   Future<void> runSelfLearning() async {
     final logSvc = PredictionLogService();
     await SelfLearningService.runInBackground(logSvc);
     _weightCache.clear(); // 清除舊快取，讓下次預測重新載入最新權重
+
+    // 注入自適應策略權重
+    final sports = ['football', 'basketball', 'baseball'];
+    final adaptiveWeights = <String, (double, double, String)>{};
+    for (final sport in sports) {
+      final w = await SelfLearningService.getAdaptiveWeights(sport);
+      adaptiveWeights[sport] = (w.aiWeight, w.marketWeight, w.strategy);
+    }
+    PredictionEngine.setAdaptiveWeights(adaptiveWeights);
+
+    // 注入動態球場因子
+    final parkFactors = await SelfLearningService.getAllDynamicParkFactors();
+    PredictionEngine.setDynamicParkFactors(parkFactors);
   }
 
   Future<Map<String, double>> _getWeights(String sport) async {

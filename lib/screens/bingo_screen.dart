@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 import '../models/prediction_log.dart';
 import '../services/bingo_service.dart';
 import '../services/prediction_log_service.dart';
+import '../services/self_learning_service.dart';
 import '../widgets/lottery_prediction_card.dart';
 
 // Top-level functions required by compute() to run on separate isolate
-BingoPrediction _computeAnalysis(List<BingoRecord> records) =>
-    BingoService.analyze(records, seed: 0);
+// Argument: (records, strategyMode) record
+BingoPrediction _computeAnalysis((List<BingoRecord>, String) arg) =>
+    BingoService.analyze(arg.$1, seed: 0, strategyMode: arg.$2);
 
 
 List<AccuracySummary> _computeAccuracyIsolate(List<BingoRecord> records) =>
@@ -86,18 +88,34 @@ class _BingoScreenState extends State<BingoScreen>
   final _logSvc = PredictionLogService();
 
 
+  // 快取上一次的分析結果：若開獎號碼未變，直接沿用不重算
+  int _cachedDrawNo = -1;
+  BingoPrediction? _cachedPred;
+  List<AccuracySummary> _cachedAccuracy = [];
+
   Future<void> _load({bool forceRefresh = false}) async {
     setState(() {
       _isLoading = true;
       _errorMsg = '';
     });
     final records = await _service.fetchRecent(forceRefresh: forceRefresh);
+    final bingoStrategy = await SelfLearningService.getRecommendedBingoStrategy();
     BingoPrediction? pred;
     List<AccuracySummary> accuracy = [];
     if (records.isNotEmpty) {
-      pred = await compute(_computeAnalysis, records);
-      if (records.length >= 22) {
-        accuracy = await compute(_computeAccuracyIsolate, records);
+      final latestDrawNo = records.first.drawNo;
+      // 若最新一期與快取相同且非強制刷新，直接使用快取結果
+      if (!forceRefresh && latestDrawNo == _cachedDrawNo && _cachedPred != null) {
+        pred = _cachedPred;
+        accuracy = _cachedAccuracy;
+      } else {
+        pred = await compute(_computeAnalysis, (records, bingoStrategy));
+        if (records.length >= 22) {
+          accuracy = await compute(_computeAccuracyIsolate, records);
+        }
+        _cachedDrawNo = latestDrawNo;
+        _cachedPred = pred;
+        _cachedAccuracy = accuracy;
       }
     }
 

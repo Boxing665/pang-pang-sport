@@ -123,8 +123,8 @@ class _MatchAnalysisScreenState extends State<MatchAnalysisScreen> {
   // ── 統計對比 ────────────────────────────────────────────────────────────────
 
   Widget _buildStats(ThemeData theme) {
-    final hasPitcher = f.sport == SportType.baseball &&
-        (f.homeProbablePitcher.isNotEmpty || f.awayProbablePitcher.isNotEmpty);
+    // 棒球永遠顯示投手面板：有 ESPN probables 則顯示真實數據，否則顯示球隊 ERA 推算值
+    final hasPitcher = f.sport == SportType.baseball;
     return _Section(
       title: '球隊統計對比',
       icon: Icons.bar_chart_rounded,
@@ -504,6 +504,15 @@ class _StatsTable extends StatelessWidget {
             ),
           ),
           const Divider(height: 1, color: Color(0x22FFFFFF)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: const [
+                Text('★ 真實數據  ~ 估算', style: TextStyle(color: Colors.white38, fontSize: 9)),
+              ],
+            ),
+          ),
           for (final row in rows) ...[
             _StatRow(
               label: row['label'] as String,
@@ -529,8 +538,12 @@ class _StatsTable extends StatelessWidget {
     switch (sport) {
       case SportType.football:
         rows.addAll([
-          _row('均進球', hf.averageScored, af.averageScored, fmt: '%.2f', higher: true),
-          _row('均失球', hf.averageConceded, af.averageConceded, fmt: '%.2f', higher: false),
+          _row('均進球', hf.averageScored, af.averageScored, fmt: '%.2f', higher: true,
+              homeSuffix: hf.averageScored > 0.10 ? '★' : '~',
+              awaySuffix: af.averageScored > 0.10 ? '★' : '~'),
+          _row('均失球', hf.averageConceded, af.averageConceded, fmt: '%.2f', higher: false,
+              homeSuffix: hf.averageConceded > 0.10 ? '★' : '~',
+              awaySuffix: af.averageConceded > 0.10 ? '★' : '~'),
           if (_has(homeStats, awayStats, ['possessionPct', 'possessionAverage', 'possession']))
             _row('控球率%', _pick(homeStats, ['possessionPct', 'possessionAverage', 'possession']),
                 _pick(awayStats, ['possessionPct', 'possessionAverage', 'possession']),
@@ -559,8 +572,12 @@ class _StatsTable extends StatelessWidget {
         break;
       case SportType.basketball:
         rows.addAll([
-          _row('均得分', hf.averageScored, af.averageScored, fmt: '%.1f', higher: true),
-          _row('均失分', hf.averageConceded, af.averageConceded, fmt: '%.1f', higher: false),
+          _row('均得分', hf.averageScored, af.averageScored, fmt: '%.1f', higher: true,
+              homeSuffix: hf.averageScored > 0.10 ? '★' : '~',
+              awaySuffix: af.averageScored > 0.10 ? '★' : '~'),
+          _row('均失分', hf.averageConceded, af.averageConceded, fmt: '%.1f', higher: false,
+              homeSuffix: hf.averageConceded > 0.10 ? '★' : '~',
+              awaySuffix: af.averageConceded > 0.10 ? '★' : '~'),
           if (_has(homeStats, awayStats, ['avgPoints', 'points']))
             _row('場均得分', _pick(homeStats, ['avgPoints', 'points']),
                 _pick(awayStats, ['avgPoints', 'points']),
@@ -583,8 +600,12 @@ class _StatsTable extends StatelessWidget {
         break;
       case SportType.baseball:
         rows.addAll([
-          _row('均得分', hf.averageScored, af.averageScored, fmt: '%.2f', higher: true),
-          _row('均失分', hf.averageConceded, af.averageConceded, fmt: '%.2f', higher: false),
+          _row('均得分', hf.averageScored, af.averageScored, fmt: '%.2f', higher: true,
+              homeSuffix: hf.averageScored > 0.10 ? '★' : '~',
+              awaySuffix: af.averageScored > 0.10 ? '★' : '~'),
+          _row('均失分', hf.averageConceded, af.averageConceded, fmt: '%.2f', higher: false,
+              homeSuffix: hf.averageConceded > 0.10 ? '★' : '~',
+              awaySuffix: af.averageConceded > 0.10 ? '★' : '~'),
           if (_has(homeStats, awayStats, ['battingAverage', 'avg', 'AVG']))
             _row('打擊率', _pick(homeStats, ['battingAverage', 'avg', 'AVG']),
                 _pick(awayStats, ['battingAverage', 'avg', 'AVG']),
@@ -621,7 +642,7 @@ class _StatsTable extends StatelessWidget {
   }
 
   Map<String, dynamic> _row(String label, double home, double away,
-      {required String fmt, required bool higher}) {
+      {required String fmt, required bool higher, String homeSuffix = '', String awaySuffix = ''}) {
     String format(double v) {
       if (fmt == '%.3f') return v.toStringAsFixed(3);
       if (fmt == '%.2f') return v.toStringAsFixed(2);
@@ -630,8 +651,8 @@ class _StatsTable extends StatelessWidget {
     }
     return {
       'label': label,
-      'home': format(home),
-      'away': format(away),
+      'home': '${format(home)}$homeSuffix',
+      'away': '${format(away)}$awaySuffix',
       'homeRaw': home,
       'awayRaw': away,
       'higherIsBetter': higher,
@@ -1155,24 +1176,43 @@ class _PitcherPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final f = fixture;
+    // 推算 ERA：有 ESPN 數據用真實數據；無則從球隊近期失分均值估算
+    String deriveEra(String espnEra, double avgConceded, double? last3) {
+      if (espnEra.isNotEmpty) return espnEra;
+      final base = last3 ?? avgConceded;
+      if (base <= 0) return '';
+      return (base / 0.85).clamp(2.5, 8.0).toStringAsFixed(2);
+    }
+    final homeEra = deriveEra(f.homeProbableEra, f.homeForm.averageConceded, f.homeForm.last3AvgConceded);
+    final awayEra = deriveEra(f.awayProbableEra, f.awayForm.averageConceded, f.awayForm.last3AvgConceded);
+    final homeInferred = f.homeProbableEra.isEmpty && homeEra.isNotEmpty;
+    final awayInferred = f.awayProbableEra.isEmpty && awayEra.isNotEmpty;
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: _panelDecor(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('先發投手對比',
-              style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w600)),
+          Row(children: [
+            const Text('先發投手對比',
+                style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.w600)),
+            if (homeInferred || awayInferred) ...[
+              const SizedBox(width: 6),
+              const Text('（ERA 由近期失分推算）',
+                  style: TextStyle(color: Colors.white30, fontSize: 9)),
+            ],
+          ]),
           const SizedBox(height: 10),
           Row(
             children: [
-              Expanded(child: _pitcherCard(f.homeTeam, f.homeProbablePitcher, f.homeProbableEra,
+              Expanded(child: _pitcherCard(f.homeTeam, f.homeProbablePitcher, homeEra,
                   f.homeProbableWhip, f.homeProbableK9, f.homeProbableWins, f.homeProbableLosses,
-                  AppTheme.primaryAccent)),
+                  homeInferred, AppTheme.primaryAccent)),
               const SizedBox(width: 8),
-              Expanded(child: _pitcherCard(f.awayTeam, f.awayProbablePitcher, f.awayProbableEra,
+              Expanded(child: _pitcherCard(f.awayTeam, f.awayProbablePitcher, awayEra,
                   f.awayProbableWhip, f.awayProbableK9, f.awayProbableWins, f.awayProbableLosses,
-                  AppTheme.highlight)),
+                  awayInferred, AppTheme.highlight)),
             ],
           ),
         ],
@@ -1181,7 +1221,7 @@ class _PitcherPanel extends StatelessWidget {
   }
 
   Widget _pitcherCard(String teamName, String name, String era, String whip, String k9,
-      String wins, String losses, Color accent) {
+      String wins, String losses, bool inferred, Color accent) {
     final eraVal = double.tryParse(era);
     final eraColor = eraVal == null
         ? Colors.white54
@@ -1190,6 +1230,7 @@ class _PitcherPanel extends StatelessWidget {
             : eraVal <= 4.50
                 ? Colors.white70
                 : Colors.redAccent;
+    final eraLabel = inferred ? '≈$era' : era; // 推算值加「≈」標示
     return Container(
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -1204,8 +1245,11 @@ class _PitcherPanel extends StatelessWidget {
               style: TextStyle(color: accent, fontSize: 10, fontWeight: FontWeight.w700),
               overflow: TextOverflow.ellipsis),
           const SizedBox(height: 4),
-          Text(name.isNotEmpty ? name : '—',
-              style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+          Text(name.isNotEmpty ? name : (inferred ? '未公告' : '—'),
+              style: TextStyle(
+                  color: inferred ? Colors.white38 : Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600),
               overflow: TextOverflow.ellipsis),
           if (wins.isNotEmpty || losses.isNotEmpty) ...[
             const SizedBox(height: 2),
@@ -1213,11 +1257,11 @@ class _PitcherPanel extends StatelessWidget {
                 style: const TextStyle(color: Colors.white54, fontSize: 10)),
           ],
           const SizedBox(height: 6),
-          _statChip('ERA', era, eraColor),
+          _statChip('ERA', eraLabel.isNotEmpty ? eraLabel : '—', eraColor),
           const SizedBox(height: 3),
-          _statChip('WHIP', whip, Colors.white60),
+          _statChip('WHIP', whip.isNotEmpty ? whip : '—', Colors.white60),
           const SizedBox(height: 3),
-          _statChip('K/9', k9, Colors.white60),
+          _statChip('K/9', k9.isNotEmpty ? k9 : '—', Colors.white60),
         ],
       ),
     );
@@ -1318,65 +1362,87 @@ class _FinalPredictionPanel extends StatelessWidget {
     final isDraw = isDrawFavored || (isFootball && drawP > homeP && drawP > awayP);
     final homeWins = !isDraw && homeP >= awayP;
 
-    // Score label (football only)
+    // ── 預測比分（足球）/ 大小分（棒球籃球）────────────────────────
+    // 足球：用盤口大小分 × 勝率比推算預測比分
+    // 棒球/籃球：不顯示精確比分，改顯示「預測大/小分」+ 勝分差
+    final bool hasRealLine = odds.overLine > 0 && odds.bookmakerName != '模型推算';
+    final String lineStr = hasRealLine
+        ? (odds.overLine % 1 == 0
+            ? odds.overLine.toInt().toString()
+            : odds.overLine.toStringAsFixed(1))
+        : '';
+
+    // 足球：預測比分卡片
     String scoreLabel = '';
     if (isFootball) {
-      if (p.marketHomeExp > 0 && p.marketAwayExp > 0 && odds.bookmakerName != '模型推算') {
+      if (hasRealLine) {
+        // 用盤口總分 × 勝率比分配主客得分
+        final total = odds.overLine;
+        final ratio = (homeP / (homeP + awayP)).clamp(0.20, 0.80);
+        final h = (total * ratio).round();
+        final a = (total - h).round();
+        // 確保勝負方向正確
+        if (homeWins && h <= a) {
+          scoreLabel = '${a + 1} : $a';
+        } else if (!homeWins && !isDraw && a <= h) {
+          scoreLabel = '$h : ${h + 1}';
+        } else if (isDraw) {
+          final g = ((h + a) / 2).round();
+          scoreLabel = '$g : $g';
+        } else {
+          scoreLabel = '$h : $a';
+        }
+      } else if (p.marketHomeExp > 0 && p.marketAwayExp > 0) {
         scoreLabel = '${p.marketHomeExp.round()} : ${p.marketAwayExp.round()}';
       } else {
         scoreLabel = '${p.predictedHomeScore} : ${p.predictedAwayScore}';
       }
     }
 
-    // O/U label
+    // 大小分標籤（所有運動）
+    // 將 AI 模型預測總分與盤口比較，判斷「預測大/小分」
     String ouLabel = '';
-    if (odds.overLine > 0 && odds.bookmakerName != '模型推算') {
+    if (hasRealLine) {
       final unit = isFootball ? '球' : '分';
-      final line = odds.overLine % 1 == 0 ? odds.overLine.toInt().toString() : odds.overLine.toStringAsFixed(1);
-      if (odds.overOdds < odds.underOdds) {
-        ouLabel = '大$line$unit (${odds.overOdds.toStringAsFixed(2)})';
-      } else if (odds.underOdds < odds.overOdds) {
-        ouLabel = '小$line$unit (${odds.underOdds.toStringAsFixed(2)})';
+      final ai = p.aiTotalExpected;
+      final line = odds.overLine;
+      // 差距超過 3% 才給出明確大/小方向
+      if (ai > line * 1.03) {
+        ouLabel = '預測大$lineStr$unit';
+      } else if (ai < line * 0.97) {
+        ouLabel = '預測小$lineStr$unit';
       } else {
-        ouLabel = '$line$unit';
+        ouLabel = '盤口$lineStr$unit（中性）';
       }
-    } else if (!isFootball && (f.sport == SportType.baseball || f.sport == SportType.basketball)) {
+    } else if (f.sport == SportType.baseball || f.sport == SportType.basketball) {
       ouLabel = '暫無盤口';
     }
 
-    // Spread label for basketball/baseball
+    // 勝分差標籤（棒球 / 籃球）
+    // 用 predictedMargin（勝率差 × 比例係數）推算，每場比賽依強弱不同
     String spreadLabel = '';
     if (!isFootball) {
-      final hasRealSpread = odds.spread != 0.0 && odds.bookmakerName != '模型推算';
-      final spreadAbs = odds.spread.abs();
-      if (f.sport == SportType.basketball && hasRealSpread) {
-        final winner = homeWins ? f.homeTeam : f.awayTeam;
-        final short = winner.length > 4 ? '${winner.substring(0, 4)}..' : winner;
-        final String range;
-        if (spreadAbs <= 5.5) {
-          range = '1-5分';
-        } else if (spreadAbs <= 10.5) {
-          range = '6-10分';
-        } else if (spreadAbs <= 15.5) {
-          range = '11-15分';
-        } else if (spreadAbs <= 20.5) {
-          range = '16-20分';
-        } else {
-          range = '>20分';
-        }
-        spreadLabel = '$short $range';
-      } else if (f.sport == SportType.baseball && hasRealSpread) {
-        final winner = homeWins ? f.homeTeam : f.awayTeam;
-        final short = winner.length > 4 ? '${winner.substring(0, 4)}..' : winner;
-        final String range;
-        if (spreadAbs >= 2.5 || (homeWins ? homeP : awayP) >= 0.65) {
-          range = '>2分';
-        } else if (spreadAbs >= 1.5 || (homeWins ? homeP : awayP) >= 0.57) {
-          range = '2分';
-        } else {
-          range = '1分';
-        }
-        spreadLabel = '$short $range';
+      final margin = p.predictedMargin.abs();
+      final winner = homeWins ? f.homeTeam : f.awayTeam;
+      final short = winner.length > 4 ? '${winner.substring(0, 4)}..' : winner;
+      if (f.sport == SportType.baseball) {
+        final runs = margin < 0.75 ? '1分以內'
+            : margin < 1.5  ? '約1分'
+            : margin < 2.5  ? '約2分'
+            : margin < 3.5  ? '約3分'
+            : '4分以上';
+        spreadLabel = '$short $runs';
+      } else if (f.sport == SportType.basketball) {
+        // 籃球：優先用賭盤讓分，若讓分為標準值則用模型
+        final hasRealSpread = odds.spread != 0.0 && odds.bookmakerName != '模型推算';
+        final displayMargin = hasRealSpread ? odds.spread.abs() : margin;
+        final pts = displayMargin < 3.5   ? '1-3分'
+            : displayMargin < 6.5   ? '4-6分'
+            : displayMargin < 10.5  ? '7-10分'
+            : displayMargin < 15.5  ? '11-15分'
+            : displayMargin < 20.5  ? '16-20分'
+            : '20分以上';
+        spreadLabel = '$short $pts';
       }
     }
 
@@ -1449,7 +1515,9 @@ class _FinalPredictionPanel extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(ouLabel,
                             style: TextStyle(
-                                color: ouLabel.startsWith('大') ? Colors.redAccent : Colors.lightBlueAccent,
+                                color: ouLabel.contains('大') ? Colors.redAccent
+                                    : ouLabel.contains('小') ? Colors.lightBlueAccent
+                                    : Colors.white54,
                                 fontSize: 14,
                                 fontWeight: FontWeight.w700)),
                       ],

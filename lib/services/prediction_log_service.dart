@@ -517,9 +517,9 @@ class PredictionLogService {
     required String league,
     required DateTime matchTime,
     required int predictedHome,
-    required int predictedHomeRaw, // 新增：原始預測比分
+    required int predictedHomeRaw,
     required int predictedAway,
-    required int predictedAwayRaw, // 新增：原始預測比分
+    required int predictedAwayRaw,
     required double confidence,
     String sportType = 'football',
     String winner = '',
@@ -529,6 +529,9 @@ class PredictionLogService {
     double mcAwayWinPct = 0.0,
     double kellyHome = 0.0,
     double kellyAway = 0.0,
+    String ouCall = '',        // 'over' | 'under' | ''
+    double overLine = 0.0,     // 盤口大小分線
+    String adaptiveStrategy = 'strategy_b', // 本次使用的策略
   }) async {
     final log = PredictionLog(
       id: 'sport_${matchId}_$sportType',
@@ -553,6 +556,9 @@ class PredictionLogService {
         'mcAwayWinPct': mcAwayWinPct,
         'kellyHome': kellyHome,
         'kellyAway': kellyAway,
+        if (ouCall.isNotEmpty) 'ouCall': ouCall,
+        if (overLine > 0) 'overLine': overLine,
+        'adaptiveStrategy': adaptiveStrategy,
       },
     );
     // 若新預測有真實比分（非 0:0），但舊紀錄是 0:0，則覆蓋舊紀錄

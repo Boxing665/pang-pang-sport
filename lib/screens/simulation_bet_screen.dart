@@ -6,6 +6,7 @@ import '../models/sport_type.dart';
 import '../services/pang_pang_sports_service.dart';
 import '../services/lottery_service.dart';
 import '../services/bingo_service.dart';
+import '../services/self_learning_service.dart';
 import '../theme/app_theme.dart';
 
 /// 預測畫面（體育 / 樂透 / 賓果 三分頁）— 純預測，無投注
@@ -116,10 +117,11 @@ class _SimulatePredictionTabState extends State<_SimulatePredictionTab> {
       ]);
       
       if (mounted) {
+        final bingoStrategy = await SelfLearningService.getRecommendedBingoStrategy();
         setState(() {
           _cachedSports = results[0] as List<PredictionResult>;
           final bingoRecords = results[1] as List<BingoRecord>;
-          _bingoPred = BingoService.analyze(bingoRecords, seed: _rand.nextInt(100));
+          _bingoPred = BingoService.analyze(bingoRecords, seed: _rand.nextInt(100), strategyMode: bingoStrategy);
         });
       }
     } catch (_) {
@@ -1108,7 +1110,8 @@ class _BingoPredictionTabState extends State<_BingoPredictionTab>
     });
     try {
       final records = await _service.fetchRecent();
-      final pred = BingoService.analyze(records, seed: 0);
+      final bingoStrategy = await SelfLearningService.getRecommendedBingoStrategy();
+      final pred = BingoService.analyze(records, seed: 0, strategyMode: bingoStrategy);
       if (mounted) {
         setState(() {
           _records = records;

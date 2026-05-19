@@ -8,6 +8,7 @@ import '../services/lottery_service.dart';
 import '../services/pang_pang_sports_service.dart';
 import '../services/prediction_log_service.dart';
 import '../services/real_data_service.dart';
+import '../services/self_learning_service.dart';
 
 /// 圖表分析頁面：體育 / 539 / 賓果的預測 vs 實際比對圖表
 /// 讓用戶視覺化地看到哪裡命中、哪裡失誤，幫助 AI 修正數據提高命中率
@@ -28,6 +29,7 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
   late TabController _tabCtrl;
   List<PredictionLog> _all = [];
   bool _loading = true;
+  bool _learning = false;   // 自我學習進行中
 
   static const _bg   = Color(0xFF050E24);
   static const _bg1  = Color(0xFF0D1E4A);
@@ -69,6 +71,16 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
           final pa = pred.predictedAwayScore;
           if (ph == 0 && pa == 0) continue;
           final winner = ph > pa ? 'home' : ph < pa ? 'away' : 'draw';
+          final ol = match.odds.overLine;
+          final ouCall = ol > 0
+              ? (pred.aiTotalExpected > ol * 1.03
+                  ? 'over'
+                  : pred.aiTotalExpected < ol * 0.97 ? 'under' : '')
+              : '';
+          final adaptiveStrategy = pred.keyFactors
+              .firstWhere((f) => f.startsWith('__adaptive_strategy:'),
+                  orElse: () => '__adaptive_strategy:strategy_b')
+              .replaceFirst('__adaptive_strategy:', '');
           await _svc.saveSportPrediction(
             matchId:          match.id,
             homeTeam:         match.homeTeam,
@@ -85,6 +97,9 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
             mcHomeWinPct:     pred.monteCarloHomeWinPct,
             mcDrawPct:        pred.monteCarloDrawPct,
             mcAwayWinPct:     pred.monteCarloAwayWinPct,
+            ouCall:           ouCall,
+            overLine:         ol,
+            adaptiveStrategy: adaptiveStrategy,
           );
         } catch (_) {}
       }
@@ -100,7 +115,16 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
           final pa = pred.predictedAwayScore;
           if (ph == 0 && pa == 0) continue;
           final winner = ph > pa ? 'home' : ph < pa ? 'away' : 'draw';
-          // Only save if not already recorded (saveSportPrediction is idempotent by ID)
+          final ol = match.odds.overLine;
+          final ouCall = ol > 0
+              ? (pred.aiTotalExpected > ol * 1.03
+                  ? 'over'
+                  : pred.aiTotalExpected < ol * 0.97 ? 'under' : '')
+              : '';
+          final adaptiveStrategy = pred.keyFactors
+              .firstWhere((f) => f.startsWith('__adaptive_strategy:'),
+                  orElse: () => '__adaptive_strategy:strategy_b')
+              .replaceFirst('__adaptive_strategy:', '');
           await _svc.saveSportPrediction(
             matchId:          match.id,
             homeTeam:         match.homeTeam,
@@ -117,6 +141,9 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
             mcHomeWinPct:     pred.monteCarloHomeWinPct,
             mcDrawPct:        pred.monteCarloDrawPct,
             mcAwayWinPct:     pred.monteCarloAwayWinPct,
+            ouCall:           ouCall,
+            overLine:         ol,
+            adaptiveStrategy: adaptiveStrategy,
           );
         } catch (_) {}
       }
@@ -192,6 +219,8 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
       final bingoRecs = await _bingoSvc.fetchRecent(forceRefresh: true);
 
       if (bingoRecs.isNotEmpty) {
+        final bingoStrategy = await SelfLearningService.getRecommendedBingoStrategy();
+
         // 回溯預測：對近 15 期每一期，用更舊的記錄模擬預測
         final retroCount = bingoRecs.length.clamp(0, 15);
         for (var i = 1; i <= retroCount; i++) {
@@ -199,7 +228,7 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
           if (historical.length < 5) continue;
           final targetDrawNo = bingoRecs[i - 1].drawNo;
           try {
-            final pred = BingoService.analyze(historical, seed: 0);
+            final pred = BingoService.analyze(historical, seed: 0, strategyMode: bingoStrategy);
             if (pred.recommended.isNotEmpty) {
               await _svc.saveBingoPrediction(
                 drawNo:     targetDrawNo,
@@ -219,7 +248,7 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
 
         // 下期預測
         try {
-          final pred = BingoService.analyze(bingoRecs.take(50).toList(), seed: 0);
+          final pred = BingoService.analyze(bingoRecs.take(50).toList(), seed: 0, strategyMode: bingoStrategy);
           if (pred.nextDrawNo > 0 && pred.recommended.isNotEmpty) {
             await _svc.saveBingoPrediction(
               drawNo:     pred.nextDrawNo,
@@ -252,6 +281,21 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
       _all = all;
       _loading = false;
     });
+
+    // ── E: 自我學習：對預測失敗的場次調整訊號權重 ──────────────────
+    // 在背景執行，每小時最多一次，不阻塞 UI
+    _triggerSelfLearning();
+  }
+
+  Future<void> _triggerSelfLearning() async {
+    if (_learning) return;
+    if (!mounted) return;
+    setState(() => _learning = true);
+    try {
+      await SelfLearningService.runInBackground(_svc);
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => _learning = false);
   }
 
   List<PredictionLog> get _sports =>
@@ -325,9 +369,24 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
               ),
             ),
           const Spacer(),
+          if (_learning)
+            const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: Row(children: [
+                SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 1.5, color: Color(0xFF3DDC97)),
+                ),
+                SizedBox(width: 4),
+                Text('自我學習中',
+                    style: TextStyle(color: Color(0xFF3DDC97), fontSize: 10)),
+              ]),
+            ),
           IconButton(
               icon: const Icon(Icons.refresh_rounded, color: _cyan),
-              onPressed: _load),
+              onPressed: _loading ? null : _load),
         ]),
       );
 
@@ -405,7 +464,24 @@ class _SportChartTab extends StatelessWidget {
         ],
         if (ballSports.isNotEmpty) ...[
           const SizedBox(height: 16),
-          _sectionTitle('🏀⚾ 籃球/棒球 勝負 + 分差'),
+          // 有實際比分的籃球/棒球場次 → 同足球一樣顯示「預測分 vs 實際分」比對圖
+          () {
+            final withScore = ballSports
+                .where((l) => l.details.containsKey('actualHomeScore'))
+                .toList()
+              ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+            if (withScore.isEmpty) return const SizedBox.shrink();
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _sectionTitle('🏀⚾ 籃球/棒球 預測比分 vs 實際（近 ${withScore.take(15).length} 場）'),
+                const SizedBox(height: 8),
+                _ScoreComparisonChart(logs: withScore.take(15).toList().reversed.toList()),
+              ],
+            );
+          }(),
+          const SizedBox(height: 16),
+          _sectionTitle('🏀⚾ 籃球/棒球 近期記錄'),
           const SizedBox(height: 6),
           ...ballSports.take(12).map((l) => _BallSportRow(log: l)),
         ],
@@ -955,6 +1031,13 @@ class _BallSportRow extends StatelessWidget {
     final sport = log.details['sport'] as String? ?? '';
     final sportIcon = sport == 'basketball' ? '🏀' : '⚾';
 
+    // Predicted scores
+    final predH = (log.details['predictedHomeScoreRaw'] as num?)?.toInt()
+        ?? (log.details['predictedHome'] as num?)?.toInt();
+    final predA = (log.details['predictedAwayScoreRaw'] as num?)?.toInt()
+        ?? (log.details['predictedAway'] as num?)?.toInt();
+    final hasPredScore = predH != null && predA != null && (predH > 0 || predA > 0);
+
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -975,17 +1058,32 @@ class _BallSportRow extends StatelessWidget {
               overflow: TextOverflow.ellipsis),
         ),
         const SizedBox(width: 6),
-        // Predicted direction
+        // Predicted score (or direction fallback)
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
           decoration: BoxDecoration(
             color: Colors.blue.withAlpha(30),
             borderRadius: BorderRadius.circular(4),
           ),
-          child: Text('預$predLabel',
-              style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 9)),
+          child: Text(
+            hasPredScore ? '預$predH:$predA' : '預$predLabel',
+            style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 9),
+          ),
         ),
-        if (actualWinner != null) ...[
+        if (actH != null && actA != null) ...[
+          const SizedBox(width: 4),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+            decoration: BoxDecoration(
+              color: dotColor.withAlpha(30),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              '實$actH:$actA',
+              style: TextStyle(color: dotColor, fontSize: 9, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ] else if (actualWinner != null) ...[
           const SizedBox(width: 4),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),

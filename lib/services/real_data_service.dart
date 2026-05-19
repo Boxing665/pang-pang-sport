@@ -6,6 +6,7 @@ import '../models/team_form.dart';
 import '../models/odds_snapshot.dart';
 import 'seven_m_service.dart';
 import 'seven_m_basketball_service.dart';
+import 'self_learning_service.dart';
 
 /// 網路數據服務 - 使用 ESPN 免費公開 API 獲取真實賽事數據
 class RealDataService {
@@ -2328,17 +2329,26 @@ class RealDataService {
       if (resp.statusCode != 200) return null;
 
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      final events = (data['events'] as List<dynamic>?) ?? [];
+      // 明確按日期降序排序（最新場次在最前），確保 ESPN 回傳順序不影響結果
+      final rawEvents = List<Map<String, dynamic>>.from(
+        ((data['events'] as List<dynamic>?) ?? []).map((e) => e as Map<String, dynamic>),
+      )..sort((a, b) {
+        final da = DateTime.tryParse(a['date'] as String? ?? '') ?? DateTime(2000);
+        final db = DateTime.tryParse(b['date'] as String? ?? '') ?? DateTime(2000);
+        return db.compareTo(da); // 新→舊
+      });
+      final events = rawEvents;
 
-      final teamScores = <double>[];   // 本隊得分（最近→最舊）
-      final oppScores = <double>[];    // 對手得分（最近→最舊）
-      final resultFlags = <String>[];  // '勝'/'負'
-      final scoreStrings = <String>[]; // "112-105 湖人"
+      final teamScores    = <double>[];
+      final oppScores     = <double>[];
+      final homeOnlyScores = <double>[]; // 主場得分（用於計算動態 Park Factor）
+      final awayOnlyScores = <double>[]; // 客場得分
+      final resultFlags   = <String>[];
+      final scoreStrings  = <String>[];
       DateTime? mostRecentGameDate;
 
-      // 由新到舊掃描完賽
-      for (final raw in events.reversed) {
-        final e = raw as Map<String, dynamic>;
+      // 由新到舊掃描完賽（已排序）
+      for (final e in events) {
         final comp = (e['competitions'] as List?)?.first as Map<String, dynamic>?;
         if (comp == null) continue;
         final state = ((comp['status'] as Map<String, dynamic>?)?['type'] as Map<String, dynamic>?)?['state'] as String? ?? '';
@@ -2349,6 +2359,7 @@ class RealDataService {
         double? opponentScore;
         String opponentName = '';
         bool isWinner = false;
+        bool isHomeGame = false;
         for (final c in competitors) {
           final cm = c as Map<String, dynamic>;
           final rawS = cm['score'];
@@ -2357,6 +2368,7 @@ class RealDataService {
           if (teamObj?['id'] == teamId) {
             myScore = score;
             isWinner = cm['winner'] == true;
+            isHomeGame = (cm['homeAway'] as String?) == 'home';
           } else {
             opponentScore = score;
             final rawName = teamObj?['displayName'] as String? ?? teamObj?['abbreviation'] as String? ?? '';
@@ -2364,6 +2376,9 @@ class RealDataService {
           }
         }
         if (myScore == null || opponentScore == null) continue;
+
+        if (isHomeGame) { homeOnlyScores.add(myScore); }
+        else { awayOnlyScores.add(myScore); }
 
         teamScores.add(myScore);
         oppScores.add(opponentScore);
@@ -2393,6 +2408,22 @@ class RealDataService {
       if (teamScores.length >= 10) {
         last10Avg = teamScores.take(10).reduce((a, b) => a + b) / 10;
         last10Conceded = oppScores.take(10).reduce((a, b) => a + b) / 10;
+      }
+
+      // 動態 Park Factor：主場得分均值 / 所有場次得分均值
+      // 只在 baseball 且有足夠主客場資料時計算，避免籃球場館效應誤算
+      if (sport == SportType.baseball &&
+          homeOnlyScores.length >= 5 &&
+          awayOnlyScores.length >= 5 &&
+          teamScores.isNotEmpty) {
+        final homeAvg = homeOnlyScores.reduce((a, b) => a + b) / homeOnlyScores.length;
+        final allAvg  = teamScores.reduce((a, b) => a + b) / teamScores.length;
+        if (allAvg > 0) {
+          // parkFactor = 主場得分 / 全季得分均值（>1 = 打者友善；<1 = 投手友善）
+          final pf = (homeAvg / allAvg).clamp(0.75, 1.35);
+          // 用球隊 ID 作為 key（避免相同城市不同球隊混用）
+          await SelfLearningService.storeDynamicParkFactor('mlb_team_$teamId', pf);
+        }
       }
 
       // 計算 B2B 與休息天數
@@ -2459,14 +2490,20 @@ class RealDataService {
       }
 
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      final events = (data['events'] as List<dynamic>?) ?? [];
+      // 按日期降序排序（最新場次在前）
+      final sortedEvents = List<Map<String, dynamic>>.from(
+        ((data['events'] as List<dynamic>?) ?? []).map((e) => e as Map<String, dynamic>),
+      )..sort((a, b) {
+        final da = DateTime.tryParse(a['date'] as String? ?? '') ?? DateTime(2000);
+        final db = DateTime.tryParse(b['date'] as String? ?? '') ?? DateTime(2000);
+        return db.compareTo(da);
+      });
 
       final teamScores = <double>[];
       final oppScores = <double>[];
       final scoreStrings = <String>[];
 
-      for (final raw in events.reversed) {
-        final e = raw as Map<String, dynamic>;
+      for (final e in sortedEvents) {
         final comp = (e['competitions'] as List?)?.first as Map<String, dynamic>?;
         if (comp == null) continue;
         final state = ((comp['status'] as Map<String, dynamic>?)?['type'] as Map<String, dynamic>?)?['state'] as String? ?? '';
@@ -2890,11 +2927,16 @@ class RealDataService {
       );
       if (resp.statusCode != 200) { _rollingCache[cacheKey] = <Map<String, dynamic>>[]; return []; }
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
-      final events = (data['events'] as List<dynamic>?) ?? [];
+      final sortedEvents = List<Map<String, dynamic>>.from(
+        ((data['events'] as List<dynamic>?) ?? []).map((e) => e as Map<String, dynamic>),
+      )..sort((a, b) {
+        final da = DateTime.tryParse(a['date'] as String? ?? '') ?? DateTime(2000);
+        final db = DateTime.tryParse(b['date'] as String? ?? '') ?? DateTime(2000);
+        return db.compareTo(da);
+      });
       final results = <Map<String, dynamic>>[];
 
-      for (final raw in events.reversed) {
-        final e = raw as Map<String, dynamic>;
+      for (final e in sortedEvents) {
         final comp = (e['competitions'] as List?)?.first as Map<String, dynamic>?;
         if (comp == null) continue;
         final state = ((comp['status'] as Map<String, dynamic>?)?['type'] as Map<String, dynamic>?)?['state'] as String? ?? '';

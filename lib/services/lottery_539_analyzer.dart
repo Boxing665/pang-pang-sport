@@ -92,15 +92,8 @@ class Lottery539Prediction {
 class Lottery539Analyzer {
   static const _cacheKey = 'lottery_539_analysis_v3';
   
-  // 最新开奖数据（2026年5月）
-  static final _recentDraws = [
-    {'date': '2026-05-18', 'numbers': [05, 10, 38]},
-    {'date': '2026-05-19', 'numbers': [16, 29, 32]},
-    {'date': '2026-05-20', 'numbers': [09, 17, 21]},
-    {'date': '2026-05-21', 'numbers': [09, 31, 35]},
-    {'date': '2026-05-22', 'numbers': [05, 10, 32]},
-    {'date': '2026-05-23', 'numbers': [20, 23, 32]},
-  ];
+  // 不再使用硬編碼數據：歷史記錄由 allHistoricalRecords 直接傳入
+  static const _recentDraws = <Map<String, dynamic>>[];
 
   final List<DrawRecord> allHistoricalRecords;
   final DateTime analysisDate;
@@ -263,10 +256,10 @@ class Lottery539Analyzer {
 
       // 计算热度分数
       final freq = stats[i]!.frequency.toDouble();
-      final maxFreq = drawsInRange.length / 3; // 每期3个号码，理论最高频率
+      final maxFreq = drawsInRange.length / 5; // 539每期5個號碼，理論最高頻率
       final freqScore = (freq / maxFreq).clamp(0.0, 1.0);
       final recencyScore = 1.0 - (lastDrawAgo / lookbackDays).clamp(0.0, 1.0);
-      final heatScore = (freqScore * 0.6 + recencyScore * 0.4);
+      final heatScore = freqScore * 0.6 + recencyScore * 0.4;
 
       stats[i] = Number539Stats(
         number: i,
@@ -368,47 +361,49 @@ class Lottery539Analyzer {
     Map<String, int> pairings,
     int count,
   ) {
+    // 綜合評分：熱度 × 60% + 間隔到期 × 40%（避免純熱號導致號碼扎堆）
+    final scored = stats.map((s) {
+      final overdueBonus = s.avgGap > 0 && s.lastDrawDaysAgo > s.avgGap
+          ? (s.lastDrawDaysAgo - s.avgGap).clamp(0, 15) * 0.04
+          : 0.0;
+      return MapEntry(s.number, s.heatScore * 0.60 + overdueBonus);
+    }).toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    // 區間多樣性：確保 5 顆號碼來自至少 3 個十位區間（1-10, 11-20, 21-30, 31-39）
     final recommended = <int>{};
+    final zoneUsed = <int, int>{}; // zone → count
+    int zone(int n) => (n - 1) ~/ 10;
 
-    // 策略1: 热号 (40%)
-    for (final num in hotNumbers.take(2)) {
-      recommended.add(num);
+    // 先按分數加入，但每個區間最多先取 2 顆
+    for (final e in scored) {
+      if (recommended.length >= count) break;
+      final z = zone(e.key);
+      if ((zoneUsed[z] ?? 0) < 2) {
+        recommended.add(e.key);
+        zoneUsed[z] = (zoneUsed[z] ?? 0) + 1;
+      }
     }
 
-    // 策略2: 冷号回暖 (30%)
-    for (final num in coldNumbers.take(1)) {
-      recommended.add(num);
+    // 若仍不足，再依分數補滿（放鬆區間限制）
+    for (final e in scored) {
+      if (recommended.length >= count) break;
+      recommended.add(e.key);
     }
 
-    // 策略3: 热配对中的号码 (30%)
-    final topPairs = pairings.entries.toList();
-    topPairs.sort((a, b) => b.value.compareTo(a.value));
-    
-    for (final pair in topPairs.take(2)) {
-      final nums = pair.key.split('-').map(int.parse).toList();
-      recommended.addAll(nums);
-    }
-
-    // 补充随机但有温度的号码
-    while (recommended.length < count) {
-      final candidate = stats.firstWhere(
-        (s) => !recommended.contains(s.number) && s.heatScore > 0.4,
-        orElse: () => stats.firstWhere(
-          (s) => !recommended.contains(s.number),
-          orElse: () => Number539Stats(
-            number: 1,
-            frequency: 0,
-            lastDrawDaysAgo: 0,
-            heatScore: 0,
-            avgGap: 0,
-            pairedWith: [],
-          ),
-        ),
-      );
-      if (candidate.number > 0) {
-        recommended.add(candidate.number);
-      } else {
-        break;
+    // 加入最強配對中未入選的號碼（若仍有空位）
+    if (recommended.length < count) {
+      final topPairs = pairings.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      for (final pair in topPairs) {
+        if (recommended.length >= count) break;
+        final nums = pair.key.split('-').map(int.parse).toList();
+        for (final n in nums) {
+          if (!recommended.contains(n)) {
+            recommended.add(n);
+            break;
+          }
+        }
       }
     }
 

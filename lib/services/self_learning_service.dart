@@ -99,6 +99,7 @@ class SelfLearningService {
           : PredictionOutcome.incorrect;
       log.accuracyScore = correct ? 1.0 : 0.0;
       await logSvc.save(log);
+      await _autoLearnFromLog(log);
     }
   }
 
@@ -241,5 +242,257 @@ class SelfLearningService {
     if (raw.contains('basketball') || raw == 'basketball') return 'basketball';
     if (raw.contains('baseball')   || raw == 'baseball')   return 'baseball';
     return 'football';
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // ── 自適應策略系統（Adaptive Strategy Engine）──────────────────────
+  // ══════════════════════════════════════════════════════════════════
+
+  static const _ouAccKey          = 'sl_ou_accuracy_v2';   // 大小分命中率
+  static const _strategyPerfKey   = 'sl_strategy_perf_v2'; // 策略績效
+  static const _parkFactorKey     = 'sl_park_factors_v2';  // 動態球場因子
+  static const _bingoStratKey     = 'sl_bingo_strat_v2';   // 賓果策略
+  static const _lottery539StratKey = 'sl_539_strat_v2';    // 539策略
+  static const _strategyWindow    = 20; // 滾動視窗大小
+
+  // ── 大小分命中率追蹤 ──────────────────────────────────────────────
+
+  /// 記錄大小分預測結果（由 PredictionLogService 結算後呼叫）
+  static Future<void> recordOUPrediction(
+      String sport, bool predictedOver, bool actualOver) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_ouAccKey);
+    final data  = raw != null
+        ? Map<String, dynamic>.from(jsonDecode(raw) as Map)
+        : <String, dynamic>{};
+    final key = _normalizeSport(sport);
+    final List<int> history = ((data[key] as List?)?.cast<int>()) ?? [];
+    history.add((predictedOver == actualOver) ? 1 : 0);
+    if (history.length > _strategyWindow) history.removeAt(0);
+    data[key] = history;
+    await prefs.setString(_ouAccKey, jsonEncode(data));
+  }
+
+  /// 取得指定運動的大小分近期命中率（0.0~1.0），樣本不足回傳 null
+  static Future<double?> getOUAccuracy(String sport) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_ouAccKey);
+    if (raw == null) return null;
+    final data    = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    final history = ((data[_normalizeSport(sport)] as List?)?.cast<int>()) ?? [];
+    if (history.length < 5) return null;
+    return history.reduce((a, b) => a + b) / history.length;
+  }
+
+  // ── 策略績效追蹤（三種策略輪替）─────────────────────────────────────
+  // strategy_a = 市場主導 (aiW=0.22, mktW=0.78)
+  // strategy_b = 均衡   (aiW=0.40, mktW=0.60)
+  // strategy_c = AI主導  (aiW=0.60, mktW=0.40)
+
+  static const _strategyProfiles = {
+    'strategy_a': (aiW: 0.22, mktW: 0.78),
+    'strategy_b': (aiW: 0.40, mktW: 0.60),
+    'strategy_c': (aiW: 0.60, mktW: 0.40),
+  };
+
+  /// 記錄某策略的預測結果
+  static Future<void> recordStrategyOutcome(
+      String sport, String strategyUsed, bool correct) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_strategyPerfKey);
+    final data  = raw != null
+        ? Map<String, dynamic>.from(jsonDecode(raw) as Map)
+        : <String, dynamic>{};
+    final sKey  = _normalizeSport(sport);
+    final sData = Map<String, dynamic>.from(
+        (data[sKey] as Map<dynamic, dynamic>?) ?? {});
+    final List<int> hist =
+        ((sData[strategyUsed] as List?)?.cast<int>()) ?? [];
+    hist.add(correct ? 1 : 0);
+    if (hist.length > _strategyWindow) hist.removeAt(0);
+    sData[strategyUsed] = hist;
+    data[sKey] = sData;
+    await prefs.setString(_strategyPerfKey, jsonEncode(data));
+  }
+
+  /// 取得建議的自適應權重（aiWeight / marketWeight）
+  /// 若樣本不足，依運動回傳安全預設值
+  static Future<({double aiWeight, double marketWeight, String strategy})>
+      getAdaptiveWeights(String sport) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_strategyPerfKey);
+    if (raw == null) return _defaultAdaptiveWeights(sport);
+    final data  = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    final sKey  = _normalizeSport(sport);
+    final sData = Map<String, dynamic>.from(
+        (data[sKey] as Map<dynamic, dynamic>?) ?? {});
+
+    String bestStrategy = 'strategy_b';
+    double bestRate = -1;
+    for (final strategy in _strategyProfiles.keys) {
+      final hist = ((sData[strategy] as List?)?.cast<int>()) ?? [];
+      if (hist.length < 5) continue; // 不足樣本跳過
+      final rate = hist.reduce((a, b) => a + b) / hist.length;
+      if (rate > bestRate) {
+        bestRate   = rate;
+        bestStrategy = strategy;
+      }
+    }
+    // 若最佳策略勝率不到 38%，升級探索下一個策略（避免卡死）
+    if (bestRate >= 0 && bestRate < 0.38) {
+      final keys = _strategyProfiles.keys.toList();
+      final idx  = keys.indexOf(bestStrategy);
+      bestStrategy = keys[(idx + 1) % keys.length];
+    }
+    final profile = _strategyProfiles[bestStrategy]!;
+    return (
+      aiWeight: profile.aiW,
+      marketWeight: profile.mktW,
+      strategy: bestStrategy,
+    );
+  }
+
+  static ({double aiWeight, double marketWeight, String strategy})
+      _defaultAdaptiveWeights(String sport) {
+    final s = _normalizeSport(sport);
+    if (s == 'baseball')   return (aiWeight: 0.35, marketWeight: 0.65, strategy: 'strategy_b');
+    if (s == 'basketball') return (aiWeight: 0.30, marketWeight: 0.70, strategy: 'strategy_b');
+    return (aiWeight: 0.38, marketWeight: 0.62, strategy: 'strategy_b');
+  }
+
+  // ── 動態球場因子（Dynamic Park Factor）──────────────────────────────
+  // 由 real_data_service 計算並存入；優先級高於硬編碼表
+
+  /// 儲存由實際得失分推算的動態球場因子
+  static Future<void> storeDynamicParkFactor(
+      String teamKey, double factor) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_parkFactorKey);
+    final data  = raw != null
+        ? Map<String, dynamic>.from(jsonDecode(raw) as Map)
+        : <String, dynamic>{};
+    data[teamKey.toLowerCase()] = factor.clamp(0.75, 1.35);
+    await prefs.setString(_parkFactorKey, jsonEncode(data));
+  }
+
+  /// 取得所有動態球場因子（供 PredictionEngine 使用）
+  static Future<Map<String, double>> getAllDynamicParkFactors() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_parkFactorKey);
+    if (raw == null) return {};
+    try {
+      final data = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      return {
+        for (final e in data.entries)
+          e.key: (e.value as num).toDouble(),
+      };
+    } catch (_) { return {}; }
+  }
+
+  // ── 賓果自適應策略 ──────────────────────────────────────────────────
+  // 策略：'frequency'（高頻熱號）| 'gap'（遺漏冷號）
+  //      | 'transition'（轉移矩陣）| 'balanced'（綜合）
+
+  static const _bingoStrategies = ['balanced', 'frequency', 'gap', 'transition'];
+
+  /// 記錄賓果策略命中情況（hitCount = 本次預測有幾個號碼中獎）
+  static Future<void> recordBingoStrategy(
+      String strategyUsed, int hitCount) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_bingoStratKey);
+    final data  = raw != null
+        ? Map<String, dynamic>.from(jsonDecode(raw) as Map)
+        : <String, dynamic>{};
+    // 用 hitCount>0 視為命中
+    final List<int> hist =
+        ((data[strategyUsed] as List?)?.cast<int>()) ?? [];
+    hist.add(hitCount > 0 ? 1 : 0);
+    if (hist.length > _strategyWindow) hist.removeAt(0);
+    data[strategyUsed] = hist;
+    await prefs.setString(_bingoStratKey, jsonEncode(data));
+  }
+
+  /// 取得建議的賓果策略名稱
+  static Future<String> getRecommendedBingoStrategy() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_bingoStratKey);
+    if (raw == null) return 'balanced';
+    final data  = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    String best = 'balanced';
+    double bestRate = -1;
+    for (final s in _bingoStrategies) {
+      final hist = ((data[s] as List?)?.cast<int>()) ?? [];
+      if (hist.length < 4) continue;
+      final rate = hist.reduce((a, b) => a + b) / hist.length;
+      if (rate > bestRate) { bestRate = rate; best = s; }
+    }
+    // 若最佳策略連續失敗（<20%命中），換策略探索
+    if (bestRate >= 0 && bestRate < 0.20) {
+      final idx = _bingoStrategies.indexOf(best);
+      best = _bingoStrategies[(idx + 1) % _bingoStrategies.length];
+    }
+    return best;
+  }
+
+  // ── 539 自適應策略 ───────────────────────────────────────────────────
+
+  static const _lottery539Strategies = ['balanced', 'hot', 'cold', 'pattern'];
+
+  static Future<void> record539Strategy(
+      String strategyUsed, int hitCount) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_lottery539StratKey);
+    final data  = raw != null
+        ? Map<String, dynamic>.from(jsonDecode(raw) as Map)
+        : <String, dynamic>{};
+    final List<int> hist =
+        ((data[strategyUsed] as List?)?.cast<int>()) ?? [];
+    hist.add(hitCount > 0 ? 1 : 0);
+    if (hist.length > _strategyWindow) hist.removeAt(0);
+    data[strategyUsed] = hist;
+    await prefs.setString(_lottery539StratKey, jsonEncode(data));
+  }
+
+  static Future<String> getRecommended539Strategy() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_lottery539StratKey);
+    if (raw == null) return 'balanced';
+    final data  = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    String best = 'balanced';
+    double bestRate = -1;
+    for (final s in _lottery539Strategies) {
+      final hist = ((data[s] as List?)?.cast<int>()) ?? [];
+      if (hist.length < 4) continue;
+      final rate = hist.reduce((a, b) => a + b) / hist.length;
+      if (rate > bestRate) { bestRate = rate; best = s; }
+    }
+    if (bestRate >= 0 && bestRate < 0.20) {
+      final idx = _lottery539Strategies.indexOf(best);
+      best = _lottery539Strategies[(idx + 1) % _lottery539Strategies.length];
+    }
+    return best;
+  }
+
+  // ── 結算時自動觸發學習 ───────────────────────────────────────────────
+
+  /// 在 _fetchPendingResults 結算後呼叫：自動記錄大小分/策略結果
+  static Future<void> _autoLearnFromLog(PredictionLog log) async {
+    final sport = log.details['sport'] as String? ?? '';
+    if (sport.isEmpty) return;
+
+    // 大小分學習
+    final predictedOver = log.details['ouCall'] as String?; // 'over' | 'under'
+    final actualH = (log.details['actualHomeScore'] as num?)?.toDouble();
+    final actualA = (log.details['actualAwayScore'] as num?)?.toDouble();
+    final overLine = (log.details['overLine'] as num?)?.toDouble();
+    if (predictedOver != null && actualH != null && actualA != null && overLine != null && overLine > 0) {
+      final actualOver = (actualH + actualA) > overLine;
+      await recordOUPrediction(sport, predictedOver == 'over', actualOver);
+    }
+
+    // 策略學習
+    final strategy = log.details['adaptiveStrategy'] as String? ?? 'strategy_b';
+    final correct  = log.outcome == PredictionOutcome.correct;
+    await recordStrategyOutcome(sport, strategy, correct);
   }
 }

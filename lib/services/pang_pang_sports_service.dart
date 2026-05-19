@@ -97,28 +97,68 @@ class PredictionEngine {
   const PredictionEngine();
 
   static const _mlbParkFactors = {
-    'Colorado': 1.18, 'Rockies': 1.18, '科羅拉多': 1.18, '落磯': 1.18,
-    'Cincinnati': 1.09, 'Reds': 1.09, '辛辛那提': 1.09, '紅人': 1.09,
-    'Boston': 1.06, 'Red Sox': 1.06, '波士頓': 1.06, '紅襪': 1.06,
-    'Chicago Cubs': 1.04, '小熊': 1.04,
-    'Yankees': 1.04, '洋基': 1.04,
+    // 顯著打者友善（大分場地）
+    'Colorado': 1.20, 'Rockies': 1.20, '科羅拉多': 1.20, '落磯': 1.20,    // Coors Field 高海拔
+    'Cincinnati': 1.09, 'Reds': 1.09, '辛辛那提': 1.09, '紅人': 1.09,     // Great American Ball Park
+    'Texas': 1.08, 'Rangers': 1.08, '德州': 1.08, '遊騎兵': 1.08,         // Globe Life Field
+    'Boston': 1.07, 'Red Sox': 1.07, '波士頓': 1.07, '紅襪': 1.07,        // Fenway Park
+    'Yankees': 1.07, '洋基': 1.07,                                         // Yankee Stadium（短左外野）
+    'Chicago Cubs': 1.05, '小熊': 1.05,                                    // Wrigley Field
+    'Philadelphia': 1.04, 'Phillies': 1.04, '費城': 1.04, '費城人': 1.04, // Citizens Bank Park
+    'Baltimore': 1.03, 'Orioles': 1.03, '巴爾的摩': 1.03, '金鶯': 1.03,  // Camden Yards
+    'Minnesota': 1.02, 'Twins': 1.02, '明尼蘇達': 1.02, '雙城': 1.02,    // Target Field
+    // 中性
+    'Detroit': 0.97, 'Tigers': 0.97, '底特律': 0.97, '老虎': 0.97,        // Comerica Park
+    'Toronto': 0.97, 'Blue Jays': 0.97, '多倫多': 0.97, '藍鳥': 0.97,    // Rogers Centre（人工草皮）
     'Mets': 0.98, '大都會': 0.98,
-    'Astros': 0.98, '太空人': 0.98,
+    'Astros': 0.97, '太空人': 0.97,                                        // Minute Maid Park（調整後略低）
+    'Houston': 0.97, '休士頓': 0.97,
     'Braves': 0.99, '勇士': 0.99,
-    'Dodgers': 0.96, '道奇': 0.96,
     'Cardinals': 0.97, '紅雀': 0.97,
     'Rays': 0.97, '光芒': 0.97,
-    'Giants': 0.93, '舊金山巨人': 0.93,
+    'Tampa Bay': 0.97, '坦帕灣': 0.97,
+    // 投手友善（小分場地）
+    'Dodgers': 0.95, '道奇': 0.95,
+    'Giants': 0.93, '舊金山巨人': 0.93,                                   // Oracle Park（海風壓制）
     'Padres': 0.91, '教士': 0.91,
     'Oakland': 0.94, '運動家': 0.94,
-    'Marlins': 0.95, '馬林魚': 0.95,
+    'Marlins': 0.94, '馬林魚': 0.94,
+    'Miami': 0.94, '邁阿密': 0.94,
+    'Seattle': 0.95, 'Mariners': 0.95, '西雅圖': 0.95, '水手': 0.95,
+    'Cleveland': 0.96, 'Guardians': 0.96, '克里夫蘭': 0.96, '守護者': 0.96,
   };
 
+  /// 動態球場因子快取（本次 app session 有效）
+  static Map<String, double> _dynamicParkFactors = {};
+
+  /// 自適應權重快取：sport.name → (aiWeight, marketWeight, strategyName)
+  /// 由外部在 App 啟動 / 每次 SelfLearning 校正後注入
+  static Map<String, (double, double, String)> _cachedAdaptiveWeights = {};
+
+  /// 注入最新的自適應策略權重（由 AiPredictionService 在背景校正後呼叫）
+  static void setAdaptiveWeights(
+      Map<String, (double, double, String)> weights) {
+    _cachedAdaptiveWeights = weights;
+  }
+
   static double _getParkFactor(String homeTeamName) {
+    // 1. 先查動態因子（由 real_data_service 根據本季實際主場得分推算）
+    final lower = homeTeamName.toLowerCase();
+    for (final entry in _dynamicParkFactors.entries) {
+      if (lower.contains(entry.key.replaceAll('mlb_team_', '').toLowerCase())) {
+        return entry.value.clamp(0.75, 1.35);
+      }
+    }
+    // 2. 退回硬編碼基準表
     for (final entry in _mlbParkFactors.entries) {
       if (homeTeamName.contains(entry.key)) return entry.value;
     }
     return 1.0;
+  }
+
+  /// 由外部（App 啟動 / 預測前）注入最新動態球場因子
+  static void setDynamicParkFactors(Map<String, double> factors) {
+    _dynamicParkFactors = factors;
   }
 
   MatchPrediction predictScore(
@@ -205,8 +245,18 @@ class PredictionEngine {
 
       // ── 先發投手 (Starting Pitcher) ─────────────────────────────
       const baselineWhip = 1.30; // MLB/CPBL 平均 WHIP
-      final awayStarterEra = (double.tryParse(fixture.awayProbableEra) ?? baselineEra).clamp(0.5, 12.0);
-      final homeStarterEra = (double.tryParse(fixture.homeProbableEra) ?? baselineEra).clamp(0.5, 12.0);
+      // 無先發 ERA 時，用近期實際失分均值推導 ERA 代理值（失分 / 0.85 ≈ ERA）
+      // 這樣弱投手陣（高失分隊）仍會產生較高 ERA，維持球隊間差異
+      double eraProxy(TeamForm f) {
+        final r3 = f.last3AvgConceded;
+        final r10 = f.last10AvgConceded;
+        final base = r3 ?? r10 ?? f.averageConceded;
+        return base > 0 ? (base / 0.85).clamp(2.5, 8.0) : baselineEra;
+      }
+      final homeEraProxy = eraProxy(fixture.homeForm);
+      final awayEraProxy = eraProxy(fixture.awayForm);
+      final awayStarterEra = (double.tryParse(fixture.awayProbableEra) ?? awayEraProxy).clamp(0.5, 12.0);
+      final homeStarterEra = (double.tryParse(fixture.homeProbableEra) ?? homeEraProxy).clamp(0.5, 12.0);
       final awayStarterK9 = (double.tryParse(fixture.awayProbableK9) ?? 8.0).clamp(3.0, 15.0);
       final homeStarterK9 = (double.tryParse(fixture.homeProbableK9) ?? 8.0).clamp(3.0, 15.0);
       // WHIP 越高（差投手）→ factor > 1.0 → 對手得分更多（與 ERA 方向相同）
@@ -228,15 +278,11 @@ class PredictionEngine {
       final homeStarterEff = (homeFip / baselineEra * 0.55 + (leagueAvgK9 / homeStarterK9) * 0.30 + homeStarterWhip / baselineWhip * 0.15).clamp(0.65, 1.40);
 
       // ── 牛棚 (Bullpen) ───────────────────────────────────────────
-      // 用球隊整體 ERA（已存於 averageConceded/0.85）估算牛棚 ERA
+      // 用球隊整體 ERA 推算牛棚 ERA（優先使用近期滾動失分，再退回賽季均值）
       // 公式：teamERA = (starterERA × 5.5局 + bullpenERA × 3.5局) / 9局
       // → bullpenERA = (teamERA × 9 − starterERA × 5.5) / 3.5
-      final homeTeamEra = fixture.homeForm.hasRealStats
-          ? (fixture.homeForm.averageConceded / 0.85).clamp(2.5, 8.0)
-          : baselineEra;
-      final awayTeamEra = fixture.awayForm.hasRealStats
-          ? (fixture.awayForm.averageConceded / 0.85).clamp(2.5, 8.0)
-          : baselineEra;
+      final homeTeamEra = homeEraProxy;
+      final awayTeamEra = awayEraProxy;
 
       final homeBullpenEra = ((homeTeamEra * 9 - homeStarterEra * 5.5) / 3.5).clamp(2.0, 8.0);
       final awayBullpenEra = ((awayTeamEra * 9 - awayStarterEra * 5.5) / 3.5).clamp(2.0, 8.0);
@@ -258,7 +304,7 @@ class PredictionEngine {
       final parkFactor = _getParkFactor(fixture.homeTeam);
       if (parkFactor != 1.0) {
         homeLambda *= parkFactor;              // 主隊打者在主場得益
-        awayLambda *= 1.0 + (parkFactor - 1.0) * 0.6; // 客隊打者同場，效果稍弱
+        awayLambda *= 1.0 + (parkFactor - 1.0) * 0.80; // 客隊打者同場，實證約為主隊效果的80%
       }
 
       // 打擊狀態動能 (+1 分動能 ≈ +2% 進攻力)
@@ -272,24 +318,23 @@ class PredictionEngine {
       // 攻防強度分開計算，避免兩隊「均值」時永遠輸出相同 λ
       const leagueAvg = 1.35; // 歐洲主要聯賽平均進球/隊
 
-      // hasFormData 已在 Step 2 前宣告（外層 scope），此處直接使用
-      // true = 有 ESPN 排行榜或近 5 場真實進失球數據
-
+      // 每隊獨立判斷：averageScored > 0.10 表示已有來自排行榜或近期滾動數據
+      // 不再要求雙隊同時有數據，避免「一隊缺數據→整場預測退化」的問題
       double homeAttack, homeDefWeak, awayAttack, awayDefWeak;
-      if (hasFormData) {
-        // 有歷史統計：直接計算攻防強度比（相對聯盟均值）
-        homeAttack  = (fixture.homeForm.averageScored  / leagueAvg).clamp(0.30, 3.0);
-        homeDefWeak = (fixture.homeForm.averageConceded / leagueAvg).clamp(0.20, 3.5);
-        awayAttack  = (fixture.awayForm.averageScored  / leagueAvg).clamp(0.30, 3.0);
-        awayDefWeak = (fixture.awayForm.averageConceded / leagueAvg).clamp(0.20, 3.5);
-      } else {
-        // 無歷史數據：從賠率隱含機率推算攻防強度
-        homeAttack  = (0.55 + fairHome * 0.90).clamp(0.40, 1.60);
-        awayAttack  = (0.55 + fairAway * 0.90).clamp(0.40, 1.60);
-        // 主隊強（fairHome 高）→ 主隊防好（主防弱度低），客隊難進
-        homeDefWeak = (1.40 - fairHome * 0.50).clamp(0.55, 1.55);
-        awayDefWeak = (1.40 - fairAway * 0.50).clamp(0.55, 1.55);
-      }
+      homeAttack = fixture.homeForm.averageScored > 0.10
+          ? (fixture.homeForm.averageScored  / leagueAvg).clamp(0.30, 3.0)
+          : (0.55 + fairHome * 0.90).clamp(0.40, 1.60);
+      homeDefWeak = fixture.homeForm.averageConceded > 0.10
+          ? (fixture.homeForm.averageConceded / leagueAvg).clamp(0.20, 3.5)
+          : (1.40 - fairHome * 0.50).clamp(0.55, 1.55);
+      awayAttack = fixture.awayForm.averageScored > 0.10
+          ? (fixture.awayForm.averageScored  / leagueAvg).clamp(0.30, 3.0)
+          : (0.55 + fairAway * 0.90).clamp(0.40, 1.60);
+      awayDefWeak = fixture.awayForm.averageConceded > 0.10
+          ? (fixture.awayForm.averageConceded / leagueAvg).clamp(0.20, 3.5)
+          : (1.40 - fairAway * 0.50).clamp(0.55, 1.55);
+      // hasFormData 仍用於後段防守校準邏輯（維持兼容）
+      hasFormData = fixture.homeForm.averageScored > 0.10 || fixture.awayForm.averageScored > 0.10;
 
       // Dixon-Coles 核心：進攻強度 × 對方防守弱度
       homeLambda = leagueAvg * homeAttack * awayDefWeak;
@@ -728,13 +773,18 @@ class PredictionEngine {
     }
     final double marketHomeExp;
     final double marketAwayExp;
-    if (odds.spread != 0.0 && odds.overLine > 0 && odds.bookmakerName != '模型推算') {
+    // 棒球標準讓分永遠是 ±1.5（業界慣例），不反映實際期望分差；
+    // 只有非標準讓分（例如季後賽 ±2.5）才直接用 spread 切分。
+    final bool spreadIsInformative = odds.spread != 0.0 && odds.overLine > 0
+        && odds.bookmakerName != '模型推算'
+        && (sport != SportType.baseball || odds.spread.abs() != 1.5);
+    if (spreadIsInformative) {
       final marketMargin = odds.spread; // 正值 = 主場預期領先（spread > 0 = 主場讓分）
       marketHomeExp = ((marketTotal + marketMargin) / 2)
           .clamp(marketTotal * 0.15, marketTotal * 0.85);
       marketAwayExp = marketTotal - marketHomeExp;
     } else {
-      // 無真實賭盤時：ratio 上限壓低至 0.70（足球）避免 marketHomeExp 偏高導致 3:0 預測
+      // 無真實賭盤或棒球標準讓分：用勝率比分配總分，讓每場有不同的 lambda 分佈
       final ratioMax = sport == SportType.football ? 0.70 : 0.80;
       final ratio = (fairHome / (fairHome + fairAway)).clamp(0.2, ratioMax);
       marketHomeExp = marketTotal * ratio;
@@ -752,19 +802,34 @@ class PredictionEngine {
     //   有真實賭盤 + 僅勝率賠率     → 賭盤較高（78-80%），AI 補充近況
     //   模型推算（無真實賭盤）       → AI 主導（55-60%），賭盤僅輔助
     final bool hasPremiumOdds = odds.isFromBookmaker && odds.bookmakerName != '模型推算';
-    final bool hasSpreadAndLine = hasPremiumOdds && odds.spread != 0.0 && odds.overLine > 1.5;
-    final marketWeight = hasSpreadAndLine
-        ? (sport == SportType.football ? 0.88
-            : sport == SportType.basketball ? 0.90
-            : 0.78)
-        : hasPremiumOdds
-            ? (sport == SportType.football ? 0.78
-                : sport == SportType.basketball ? 0.80
-                : 0.65)
-            : (sport == SportType.football ? 0.62
-                : sport == SportType.basketball ? 0.60
-                : 0.40);
+    // 棒球標準讓分 ±1.5 不算「有讓分資訊」（每場都是 1.5，不反映強弱差距）
+    final bool hasSpreadAndLine = hasPremiumOdds && odds.spread != 0.0 && odds.overLine > 1.5
+        && (sport != SportType.baseball || odds.spread.abs() != 1.5);
+    // 自適應權重：由 SelfLearningService 根據近 20 場策略績效動態調整
+    // 有真實盤口時上限為市場主導；無盤口時 AI 主導
+    final double marketWeight;
+    final String adaptiveStrategy;
+    if (hasPremiumOdds) {
+      // 向 SelfLearningService 取得自適應策略（同步讀取快取值）
+      final adaptive = _cachedAdaptiveWeights[sport.name];
+      final baseAiW = adaptive?.$1 ?? (sport == SportType.baseball ? 0.35
+          : sport == SportType.basketball ? 0.30 : 0.38);
+      adaptiveStrategy = adaptive?.$3 ?? 'strategy_b';
+      // hasSpreadAndLine 時往市場方向再推一些，最多讓市場到 88%
+      final boostIfSpread = hasSpreadAndLine ? 0.10 : 0.0;
+      marketWeight = ((1.0 - baseAiW) + boostIfSpread).clamp(0.50, 0.90);
+    } else {
+      marketWeight = sport == SportType.football ? 0.55
+          : sport == SportType.basketball ? 0.52
+          : 0.40;
+      adaptiveStrategy = 'strategy_c'; // 無盤口 → AI 主導
+    }
     final aiWeight = 1.0 - marketWeight;
+
+    // 保存市場混合前的純 AI lambda（用於大小分判斷）
+    // 市場混合後 lambda 會被 overLine 拉近，無法反映模型真實預測
+    final aiRawHome = homeLambda;
+    final aiRawAway = awayLambda;
 
     if (sport == SportType.football) {
       // 強隊收力修正：有真實數據時寬鬆（允許打爆），無真實數據時嚴格（防模型膨脹）
@@ -794,6 +859,19 @@ class PredictionEngine {
       // 棒球採用 AI + 賭盤混合策略，讓 overLine 錨定預測總分
       homeLambda = homeLambda * aiWeight + marketHomeExp * marketWeight;
       awayLambda = awayLambda * aiWeight + marketAwayExp * marketWeight;
+    }
+
+    // AI 模型預測總分：使用市場混合前的純 AI lambda
+    // aiRawHome/aiRawAway 反映球隊進攻/防守能力 + park factor，不受 overLine 拉扯
+    // 與盤口比較才有意義（若用混合後 lambda，永遠約等於 overLine → 無資訊）
+    final double aiTotalExpected = aiRawHome + aiRawAway;
+    final double predictedMargin;
+    if (sport == SportType.baseball || sport == SportType.basketball) {
+      final probDiff = fairHome - fairAway;
+      final scale = sport == SportType.baseball ? 8.0 : 40.0;
+      predictedMargin = (probDiff * scale).clamp(-6.0, sport == SportType.baseball ? 6.0 : 30.0);
+    } else {
+      predictedMargin = aiRawHome - aiRawAway;
     }
 
     // ── Step 5: 蒙地卡羅模擬（N=1000）取 mode 為主要預測比分 ─────────
@@ -1035,13 +1113,17 @@ class PredictionEngine {
         targetTotal = odds.overLine;
       }
 
-      // 2. 目標分差：讓分盤（run line）最準；無則從勝率差估算
+      // 2. 目標分差：用勝率差估算期望分差
+      // MLB 讓分盤永遠是 ±1.5（標準慣例），不能用它判斷實際勝分差大小；
+      // 例如 -1.5/-130 與 -1.5/-200 代表完全不同的強度，但 spread 都是 1.5。
+      // 改用勝率差線性估算：每 10% 勝率差 ≈ 0.8 分差，上限 6 分。
+      // 非標準讓分（≠ ±1.5）才直接錨定，例如季後賽特殊讓分。
       final double targetMargin;
-      if (odds.spread != 0.0) {
-        targetMargin = -odds.spread; // 正值 = 主隊領先分數
+      if (odds.spread != 0.0 && odds.spread.abs() != 1.5) {
+        targetMargin = -odds.spread; // 非標準讓分：直接錨定
       } else {
-        // 棒球無讓分時，每 10% 勝率差 ≈ 0.5 分差，上限 4 分
-        targetMargin = ((fairHome - fairAway) * 5.0).clamp(-4.0, 4.0);
+        // 標準讓分或無讓分：用勝率差估算（讓每場比賽有獨特的預測分差）
+        targetMargin = ((fairHome - fairAway) * 8.0).clamp(-6.0, 6.0);
       }
 
       // 3. 解方程：rawHome = (total + margin) / 2
@@ -1175,6 +1257,8 @@ class PredictionEngine {
       topScores: mc.topScores,
       marketHomeExp: marketHomeExp,
       marketAwayExp: marketAwayExp,
+      aiTotalExpected: aiTotalExpected,
+      predictedMargin: predictedMargin,
       summary: _buildSummary(
         fixture: fixture,
         homeScore: predictedHomeScore,
@@ -1203,6 +1287,7 @@ class PredictionEngine {
         marketVolumePressure: volumePressure,
         isDefensiveSwitchLikely: isDefensiveSwitchLikely,
         predictedHomeScore: predictedHomeScore,
+        adaptiveStrategy: adaptiveStrategy,
       ),
     );
   }
@@ -1717,8 +1802,12 @@ class PredictionEngine {
     double marketVolumePressure = 0.0,
     bool isDefensiveSwitchLikely = false,
     int predictedHomeScore = 0,
+    String adaptiveStrategy = 'strategy_b',
   }) {
     final factors = <String>[];
+
+    // 自適應策略標記（供 SelfLearningService 讀取，不顯示給用戶）
+    factors.add('__adaptive_strategy:$adaptiveStrategy');
 
     // 傷兵警示（若存在，排在最前面）
     if (injuryWarning != null) {
@@ -1824,9 +1913,18 @@ class PredictionEngine {
         final homeImplied = (probabilities.homeProbability * 100).toStringAsFixed(0);
         final awayImplied = (probabilities.awayProbability * 100).toStringAsFixed(0);
         factors.add('盤口隱含主勝機率 $homeImplied%，客勝機率 $awayImplied%，以此為比分退算依據。');
-        if (fixture.odds.overLine > 8.5) {
+        // ── 球場風險警示 ─────────────────────────────────────────────
+        final parkF = _getParkFactor(fixture.homeTeam);
+        if (parkF >= 1.15) {
+          factors.add('⚠️ 高分球場警示：${fixture.homeTeam}主場(Park Factor ${parkF.toStringAsFixed(2)})大幅提升雙方得分，讓分盤口需謹慎，客隊讓分風險極高。');
+        } else if (parkF >= 1.06) {
+          factors.add('注意：${fixture.homeTeam}主場為打者友善球場(Park Factor ${parkF.toStringAsFixed(2)})，大分機率偏高，客隊讓分需多加考量。');
+        }
+        if (fixture.odds.overLine > 9.0) {
+          factors.add('大小分盤口 ${fixture.odds.overLine.toStringAsFixed(1)} 偏高，莊家預期兩隊進攻火力強，預測傾向大分。');
+        } else if (fixture.odds.overLine > 8.5) {
           factors.add('大小分盤口 ${fixture.odds.overLine.toStringAsFixed(1)}，這場合兩隊打擊線皆佳，大分局可能性較高。');
-        } else {
+        } else if (fixture.odds.overLine > 0) {
           factors.add('大小分盤口 ${fixture.odds.overLine.toStringAsFixed(1)}，預期投手占優勢，低分結果機率屬「投手戰」。');
         }
         // 先發投手 ERA + WHIP + K/9 因素

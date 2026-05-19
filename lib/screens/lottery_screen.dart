@@ -21,17 +21,10 @@ class LotteryScreen extends StatefulWidget {
 
 class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserver {
   final _service = LotteryService();
-  // 孤支/二中一/三中一 分欄輸入
-  final _guzhiCtrl    = TextEditingController(); // 孤支（1個）
-  final _erzhongCtrl  = TextEditingController(); // 二中一（最多2個，逗號分隔）
-  final _sanzhongCtrl = TextEditingController(); // 三中一（最多3個，逗號分隔）
-
   LotteryFetchResult? _data;
   String? _loadError;
   bool _isLoading = false;
-  bool _showHistory = true;   // 預設展開
-  bool _showHintInput = false;
-  bool _showFiveDayProjection = true;
+  bool _showHistory = true;
   int _historyTab = 0; // 0=539 1=大樂透 2=威力彩
   PredictionLog? _lastLotteryLog;
 
@@ -47,16 +40,12 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _autoFillNewspaper();
     _loadWithCache();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _guzhiCtrl.dispose();
-    _erzhongCtrl.dispose();
-    _sanzhongCtrl.dispose();
     for (final c in _drawnCtrls) { c.dispose(); }
     super.dispose();
   }
@@ -79,14 +68,6 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
     return newspaper539Data[key];
   }
 
-  void _autoFillNewspaper() {
-    final np = _todayNewspaper;
-    if (np == null) return;
-    _guzhiCtrl.text = np.guZhi.toString();
-    _erzhongCtrl.text = np.erZhong.join(', ');
-    _sanzhongCtrl.text = np.sanZhong.join(', ');
-  }
-
   // ── 台灣時區 ───────────────────────────────────────────────────
 
   DateTime get _taiwanNow =>
@@ -104,6 +85,24 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
     final now = _taiwanNow;
     return '${now.month.toString().padLeft(2, '0')}/'
         '${now.day.toString().padLeft(2, '0')}';
+  }
+
+  /// 計算「下一期開獎日」的 MM/DD key。
+  /// 若今天開獎已出現在 records 裡（表示已開完），就預測明天（跳過週日）。
+  String _nextDrawKey(List<DrawRecord> records) {
+    final todayKey = _todayDrawKey;
+    // 若最新一筆資料的日期 == 今天 → 今天已開完，預測下一個開獎日
+    final latestDate = records.isNotEmpty ? records.first.date : '';
+    if (latestDate == todayKey) {
+      var next = _taiwanNow.add(const Duration(days: 1));
+      // 539 週一~週六開獎，跳過週日
+      if (next.weekday == DateTime.sunday) {
+        next = next.add(const Duration(days: 1));
+      }
+      return '${next.month.toString().padLeft(2, '0')}/'
+          '${next.day.toString().padLeft(2, '0')}';
+    }
+    return todayKey;
   }
 
   // ── 資料載入 ───────────────────────────────────────────────────
@@ -134,20 +133,22 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
         multipliers = analysis.strategyMultipliers;
       } catch (_) {}
 
-      final hints = _buildHints();
       final npBonuses = _todayNewspaper?.extraBonuses ?? {};
       final result = await _service.fetchAndAnalyze(
-          redHints: hints,
+          redHints: const [],
           excludeNumbers: [_taiwanNow.day],
           strategyMultipliers: multipliers,
           newspaperBonuses: npBonuses);
+
+      // 若今天開獎已出現在 records 裡，預測的是明天（下一期）
+      final drawKey = _nextDrawKey(result.records539);
 
       final numbers = result.results.map((r) => r.number).toList();
       if (numbers.isNotEmpty) {
         final Map<int, String> reasons = {for (final r in result.results) r.number: r.reason};
         await _logSvc.saveLotteryPrediction(
           lotteryType: '539',
-          drawNo: _todayDrawKey,
+          drawNo: drawKey,
           numbers: numbers,
           reasonsByNumber: reasons,
         );
@@ -187,21 +188,6 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
         if (_data == null) _loadError = e.toString();
       });
     }
-  }
-
-  /// 從三個分欄組合出 redHints 陣列：孤支 → 二中一 → 三中一
-  List<int> _buildHints() {
-    List<int> parseNums(String text, int max) => text
-        .split(',')
-        .map((s) => int.tryParse(s.trim()))
-        .whereType<int>()
-        .where((n) => n >= 1 && n <= 39)
-        .take(max)
-        .toList();
-    final guZhi   = parseNums(_guzhiCtrl.text, 1);
-    final erZhong = parseNums(_erzhongCtrl.text, 2);
-    final sanZhong = parseNums(_sanzhongCtrl.text, 3);
-    return [...guZhi, ...erZhong, ...sanZhong];
   }
 
   // ── 顏色常數（財神爺紅金配色）─────────────────────────────────
@@ -271,15 +257,7 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
                 const SizedBox(height: 14),
                 _drawnNumberInput(),
                 const SizedBox(height: 14),
-                _analysisSection(),
-                const SizedBox(height: 14),
-                _dragPatternSection(),
-                const SizedBox(height: 14),
-                _fiveDayProjectionSection(),
-                const SizedBox(height: 14),
                 _historySection(),
-                const SizedBox(height: 14),
-                _hintSection(),
                 const SizedBox(height: 30),
               ],
             ),
@@ -682,468 +660,47 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
   }
 
 
-  // ── 拖牌提示區塊 ───────────────────────────────────────────────
-
-  bool _showDrag = true;
-
-  Widget _dragPatternSection() {
-    final patterns = _data?.dragPatterns ?? [];
-    final due = patterns.where((p) => p.isDueNext).toList();
-    final nearDue = patterns.where((p) =>
-        !p.isDueNext &&
-        p.currentGap >= 0 &&
-        p.currentGap == p.interval - 1 &&
-        p.hitRate >= 0.75).toList();
-
-    final active = _data?.activeDragNumbers ?? [];
-
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Column(
-        children: [
-          GestureDetector(
-            onTap: () => setState(() => _showDrag = !_showDrag),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              color: Colors.black.withAlpha(55),
-              child: Row(
-                children: [
-                  const Icon(Icons.link_rounded, size: 16, color: _gold),
-                  const SizedBox(width: 6),
-                  const Text('拖牌提示',
-                      style: TextStyle(
-                          fontSize: 13,
-                          color: _gold,
-                          fontWeight: FontWeight.w600)),
-                  if (active.isNotEmpty) ...[
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.red.withAlpha(180),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text('${active.length}個命中',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700)),
-                    ),
-                  ],
-                  const Spacer(),
-                  Icon(_showDrag ? Icons.expand_less : Icons.expand_more,
-                      color: _gold, size: 18),
-                ],
-              ),
-            ),
-          ),
-          if (_showDrag)
-            Container(
-              width: double.infinity,
-              color: Colors.black.withAlpha(33),
-              padding: const EdgeInsets.all(12),
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator(color: _gold))
-                  : patterns.isEmpty
-                      ? Text('拖牌資料載入中…',
-                          style: TextStyle(
-                              fontSize: 12, color: Colors.white.withAlpha(160)))
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (active.isNotEmpty) ...[
-                              Text('🔴 本期拖牌目標號碼',
-                                  style: const TextStyle(
-                                      color: Colors.redAccent,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w700)),
-                              const SizedBox(height: 6),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 6,
-                                children: active.map((n) => Container(
-                                  width: 38,
-                                  height: 38,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: Colors.red.withAlpha(200),
-                                    border: Border.all(color: _gold, width: 1.5),
-                                  ),
-                                  alignment: Alignment.center,
-                                  child: Text(n.toString().padLeft(2, '0'),
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontWeight: FontWeight.w900,
-                                          fontSize: 13)),
-                                )).toList(),
-                              ),
-                              const SizedBox(height: 10),
-                            ],
-                            if (due.isNotEmpty) ...[
-                              Text('🔴 即將命中（本期）',
-                                  style: TextStyle(
-                                      color: Colors.red.withAlpha(220),
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700)),
-                              const SizedBox(height: 4),
-                              ...due.map((p) => Padding(
-                                    padding: const EdgeInsets.only(bottom: 3),
-                                    child: Text(p.description,
-                                        style: TextStyle(
-                                            color: Colors.red.withAlpha(200),
-                                            fontSize: 11,
-                                            fontFamily: 'monospace')),
-                                  )),
-                              const SizedBox(height: 8),
-                            ],
-                            if (nearDue.isNotEmpty) ...[
-                              Text('🟡 下一期即到（命中率≥75%）',
-                                  style: TextStyle(
-                                      color: Colors.orange.withAlpha(220),
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700)),
-                              const SizedBox(height: 4),
-                              ...nearDue.map((p) => Padding(
-                                    padding: const EdgeInsets.only(bottom: 3),
-                                    child: Text(p.description,
-                                        style: TextStyle(
-                                            color: Colors.orange.withAlpha(180),
-                                            fontSize: 11,
-                                            fontFamily: 'monospace')),
-                                  )),
-                            ],
-                            if (due.isEmpty && nearDue.isEmpty)
-                              Text('目前無即將命中的拖牌訊號',
-                                  style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.white.withAlpha(130))),
-                          ],
-                        ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  // ── 統計預測卡片 ───────────────────────────────────────────────
+  // ── 預測卡片：只顯示5顆最可能號碼 ────────────────────────────
 
   Widget _predictionCard() {
     final results = _data?.results ?? [];
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
       decoration: BoxDecoration(
-        color: Colors.black.withAlpha(55),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: _gold.withAlpha(80)),
+        color: Colors.black.withAlpha(70),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _gold.withAlpha(120), width: 1.5),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(children: [
-            const Icon(Icons.auto_awesome, color: _gold, size: 16),
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            const Icon(Icons.auto_awesome, color: _gold, size: 18),
             const SizedBox(width: 8),
-            const Text('胖胖推薦號碼',
-                style: TextStyle(
-                    color: _gold, fontSize: 15, fontWeight: FontWeight.w800)),
+            Text(
+              () {
+                final records = _data?.records539 ?? [];
+                final key = _nextDrawKey(records);
+                final todayKey = _todayDrawKey;
+                return key == todayKey ? '今期最推薦號碼' : '下期最推薦號碼（$key）';
+              }(),
+              style: const TextStyle(
+                  color: _gold, fontSize: 16, fontWeight: FontWeight.w900,
+                  letterSpacing: 1.2),
+            ),
           ]),
-          const SizedBox(height: 14),
+          const SizedBox(height: 20),
           if (_isLoading)
-            const Center(child: CircularProgressIndicator(color: _gold))
+            const CircularProgressIndicator(color: _gold)
           else if (results.isEmpty)
             Text('資料載入中，請稍後…',
                 style: TextStyle(color: Colors.white.withAlpha(160), fontSize: 13))
-          else ...[
+          else
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: results.map((r) => _numberBubble(r.number)).toList(),
-            ),
-            const SizedBox(height: 14),
-            ...results.map((r) => Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        r.displayNumber,
-                        style: const TextStyle(
-                            color: _gold,
-                            fontWeight: FontWeight.w700,
-                            fontFamily: 'monospace',
-                            fontSize: 13),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(r.reason,
-                            style: TextStyle(
-                                color: Colors.white.withAlpha(180),
-                                fontSize: 12)),
-                      ),
-                    ],
-                  ),
-                )),
-          ],
-        ],
-      ),
-    );
-  }
-
-  // ── 五星智能分析區塊 ───────────────────────────────────────────
-
-  bool _showAnalysis = true;
-
-  Widget _analysisSection() {
-    final da = _data?.detailedAnalysis;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Column(
-        children: [
-          GestureDetector(
-            onTap: () => setState(() => _showAnalysis = !_showAnalysis),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              color: Colors.black.withAlpha(55),
-              child: Row(
-                children: [
-                  const Icon(Icons.analytics_rounded, size: 16, color: _gold),
-                  const SizedBox(width: 6),
-                  const Text('五星智能分析',
-                      style: TextStyle(
-                          fontSize: 13,
-                          color: _gold,
-                          fontWeight: FontWeight.w600)),
-                  const Spacer(),
-                  Icon(
-                    _showAnalysis ? Icons.expand_less : Icons.expand_more,
-                    color: _gold,
-                    size: 18,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (_showAnalysis)
-            Container(
-              color: Colors.black.withAlpha(38),
-              padding: const EdgeInsets.all(14),
-              child: _isLoading
-                  ? const Center(
-                      child: CircularProgressIndicator(color: _gold))
-                  : da == null || da.recommendedCombos.isEmpty
-                      ? Text('資料載入中…',
-                          style: TextStyle(
-                              color: Colors.white.withAlpha(140),
-                              fontSize: 12))
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // ── 走勢摘要 ──────────────────────
-                            _analysisSummaryRow(da),
-                            const SizedBox(height: 12),
-                            // ── 三組推薦 ──────────────────────
-                            ...da.recommendedCombos
-                                .asMap()
-                                .entries
-                                .map((e) => Padding(
-                                      padding:
-                                          const EdgeInsets.only(bottom: 10),
-                                      child: _comboCard(e.key, e.value),
-                                    )),
-                            // ── 同尾 & 連號參考 ───────────────
-                            if (da.topConsecutivePairs.isNotEmpty ||
-                                da.topSameTailPairs.isNotEmpty)
-                              _pairReferenceRow(da),
-                          ],
-                        ),
+              children: results.take(5).map((r) => _numberBubble(r.number)).toList(),
             ),
         ],
       ),
-    );
-  }
-
-  Widget _analysisSummaryRow(dynamic da) {
-    final d = da;
-    final hotTails = (d.hotTailDigits as List<int>)
-        .map((t) => '$t尾')
-        .join('、');
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: _gold.withAlpha(18),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _gold.withAlpha(50)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(children: [
-            const Icon(Icons.bar_chart_rounded, size: 13, color: _gold),
-            const SizedBox(width: 5),
-            Text('近期走勢摘要',
-                style: TextStyle(
-                    color: _gold.withAlpha(220),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700)),
-          ]),
-          const SizedBox(height: 6),
-          _summaryChip('熱門尾數', hotTails.isEmpty ? '—' : hotTails),
-          const SizedBox(height: 4),
-          _summaryChip('奇偶', d.oddEvenTrend as String),
-          const SizedBox(height: 4),
-          _summaryChip('大小', d.bigSmallTrend as String),
-          const SizedBox(height: 4),
-          _summaryChip('近15期均值', '和值 ${(d.avgSum as double).toStringAsFixed(1)}（標準100）'),
-        ],
-      ),
-    );
-  }
-
-  Widget _summaryChip(String label, String value) {
-    return Row(
-      children: [
-        SizedBox(
-          width: 64,
-          child: Text(label,
-              style: TextStyle(
-                  color: _gold.withAlpha(160), fontSize: 11)),
-        ),
-        Expanded(
-          child: Text(value,
-              style: const TextStyle(
-                  color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
-        ),
-      ],
-    );
-  }
-
-  Widget _comboCard(int index, dynamic combo) {
-    final c = combo as dynamic;
-    final numbers = c.numbers as List<int>;
-    final colors = [Colors.red.shade700, Colors.orange.shade700, Colors.green.shade700];
-    final headerColor = colors[index % 3];
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.black.withAlpha(40),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: headerColor.withAlpha(100)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: headerColor.withAlpha(60),
-              borderRadius:
-                  const BorderRadius.vertical(top: Radius.circular(10)),
-            ),
-            child: Row(
-              children: [
-                Text(c.strategy as String,
-                    style: TextStyle(
-                        color: headerColor,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800)),
-                const Spacer(),
-                Text('${c.oddEvenLabel}  ${c.bigSmallLabel}  和值${c.sumTotal}',
-                    style: const TextStyle(
-                        color: Colors.white70, fontSize: 10)),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: numbers.map((n) => _comboBubble(n, headerColor)).toList(),
-                ),
-                const SizedBox(height: 8),
-                Text(c.rationale as String,
-                    style: TextStyle(
-                        color: Colors.white.withAlpha(160), fontSize: 10.5)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _comboBubble(int n, Color borderColor) {
-    return Container(
-      width: 42,
-      height: 42,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: _bgDeep,
-        border: Border.all(color: borderColor, width: 1.8),
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        n.toString().padLeft(2, '0'),
-        style: const TextStyle(
-            color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13),
-      ),
-    );
-  }
-
-  Widget _pairReferenceRow(dynamic da) {
-    final d = da as dynamic;
-    final consecPairs = d.topConsecutivePairs as List<List<int>>;
-    final tailPairs = d.topSameTailPairs as List<List<int>>;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 4),
-        Text('參考號碼對',
-            style: TextStyle(
-                color: _gold.withAlpha(180),
-                fontSize: 11,
-                fontWeight: FontWeight.w700)),
-        const SizedBox(height: 6),
-        if (consecPairs.isNotEmpty)
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              Text('連號：',
-                  style: TextStyle(color: Colors.orange.withAlpha(200), fontSize: 10)),
-              ...consecPairs.take(3).map((p) => _pairChip(
-                  p.map((n) => n.toString().padLeft(2, '0')).join('-'),
-                  Colors.orange)),
-            ],
-          ),
-        if (tailPairs.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Wrap(
-            spacing: 8,
-            runSpacing: 4,
-            children: [
-              Text('同尾：',
-                  style: TextStyle(color: Colors.cyan.withAlpha(200), fontSize: 10)),
-              ...tailPairs.take(3).map((p) => _pairChip(
-                  p.map((n) => n.toString().padLeft(2, '0')).join('&'),
-                  Colors.cyan)),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
-
-  Widget _pairChip(String label, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withAlpha(25),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withAlpha(80)),
-      ),
-      child: Text(label,
-          style: TextStyle(
-              color: color.withAlpha(220), fontSize: 10, fontFamily: 'monospace')),
     );
   }
 
@@ -1314,477 +871,6 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
     );
   }
 
-  Widget _fiveDayProjectionSection() {
-    final projection = _buildFiveDayProjection();
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Column(
-        children: [
-          GestureDetector(
-            onTap: () =>
-                setState(() => _showFiveDayProjection = !_showFiveDayProjection),
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              color: Colors.black.withAlpha(55),
-              child: Row(
-                children: [
-                  const Icon(Icons.timeline_rounded, size: 16, color: _gold),
-                  const SizedBox(width: 6),
-                  const Text(
-                    '5天機率推算（含連莊）',
-                    style: TextStyle(
-                        fontSize: 13,
-                        color: _gold,
-                        fontWeight: FontWeight.w600),
-                  ),
-                  const Spacer(),
-                  Icon(
-                    _showFiveDayProjection
-                        ? Icons.expand_less
-                        : Icons.expand_more,
-                    color: _gold,
-                    size: 18,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (_showFiveDayProjection)
-            Container(
-              width: double.infinity,
-              color: Colors.black.withAlpha(40),
-              padding: const EdgeInsets.all(12),
-              child: projection == null
-                  ? Text(
-                      '資料不足，需有本週星期一神卦資料與近期開獎紀錄。',
-                      style: TextStyle(
-                          fontSize: 12, color: Colors.white.withAlpha(180)),
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '星期一未開：${projection.mondayMissing.map((n) => n.toString().padLeft(2, '0')).join('  ')}',
-                          style: const TextStyle(
-                            color: Colors.orange,
-                            fontWeight: FontWeight.w700,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '連莊關注：${projection.streakWatch.map((n) => n.toString().padLeft(2, '0')).join('  ')}',
-                          style: TextStyle(
-                            color: _gold.withAlpha(220),
-                            fontWeight: FontWeight.w700,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '自動權重：未開追補 x${projection.weights.mondayMissingWeight.toStringAsFixed(2)}'
-                          '　連莊延續 x${projection.weights.streakWeight.toStringAsFixed(2)}',
-                          style: TextStyle(
-                            color: Colors.white.withAlpha(180),
-                            fontSize: 11,
-                            fontFamily: 'monospace',
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        ...projection.nextThreeDays.entries.map((e) => Padding(
-                              padding: const EdgeInsets.only(bottom: 5),
-                              child: Text(
-                                '${e.key} 推算：${e.value.map((n) => n.toString().padLeft(2, '0')).join('  ')}',
-                                style: TextStyle(
-                                  color: Colors.white.withAlpha(210),
-                                  fontSize: 12,
-                                  fontFamily: 'monospace',
-                                ),
-                              ),
-                            )),
-                      ],
-                    ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  _FiveDayProjection? _buildFiveDayProjection() {
-    final records = _data?.records539 ?? [];
-    if (records.isEmpty) return null;
-
-    final mondayKey = _thisWeekMondayKey();
-    final mondayEntry = newspaper539Data[mondayKey];
-    if (mondayEntry == null) return null;
-
-    final mondayCandidates = <int>{
-      mondayEntry.guZhi,
-      ...mondayEntry.erZhong,
-      ...mondayEntry.sanZhong,
-    };
-    final mondayDraw = records
-        .firstWhere(
-          (r) => r.date == mondayKey,
-          orElse: () => const DrawRecord(date: '', numbers: []),
-        )
-        .numbers
-        .toSet();
-    final mondayMissing = mondayCandidates.difference(mondayDraw).toList()..sort();
-
-    final latest = records.isNotEmpty ? records[0].numbers.toSet() : <int>{};
-    final second = records.length > 1 ? records[1].numbers.toSet() : <int>{};
-    final streakWatch = latest.intersection(second).toList()..sort();
-    final adaptiveWeights = _deriveAdaptiveWeights(records);
-
-    final nextThree = <String, List<int>>{};
-    final weekdayLabels = ['一', '二', '三', '四', '五', '六', '日'];
-    for (var offset = 1; offset <= 3; offset++) {
-      final dt = _weekMondayDate().add(Duration(days: offset));
-      final key =
-          '${dt.month.toString().padLeft(2, '0')}/${dt.day.toString().padLeft(2, '0')}';
-      final entry = newspaper539Data[key];
-      if (entry == null) continue;
-      final label = '$key(週${weekdayLabels[dt.weekday - 1]})';
-      nextThree[label] = _rankForFollowDays(
-        dayNumbers: [entry.guZhi, ...entry.erZhong, ...entry.sanZhong],
-        mondayMissing: mondayMissing,
-        streakWatch: streakWatch,
-        records: records,
-        weights: adaptiveWeights,
-      );
-    }
-
-    return _FiveDayProjection(
-      mondayMissing: mondayMissing,
-      streakWatch: streakWatch,
-      nextThreeDays: nextThree,
-      weights: adaptiveWeights,
-    );
-  }
-
-  List<int> _rankForFollowDays({
-    required List<int> dayNumbers,
-    required List<int> mondayMissing,
-    required List<int> streakWatch,
-    required List<DrawRecord> records,
-    required _AdaptiveProjectionWeights weights,
-  }) {
-    final recent = records.take(20).toList();
-    final score = <int, double>{};
-    for (final n in {...dayNumbers, ...mondayMissing, ...streakWatch}) {
-      if (n < 1 || n > 39) continue;
-      var s = 0.0;
-      if (dayNumbers.contains(n)) s += 2.5;
-      if (mondayMissing.contains(n)) s += 3.2 * weights.mondayMissingWeight;
-      if (streakWatch.contains(n)) s += 2.0 * weights.streakWeight;
-      final freq = recent.where((r) => r.numbers.contains(n)).length;
-      s += freq * 0.35;
-      final miss = recent.indexWhere((r) => r.numbers.contains(n));
-      if (miss >= 4 || miss == -1) s += 1.1;
-      score[n] = s;
-    }
-    final sorted = score.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    return sorted.take(5).map((e) => e.key).toList();
-  }
-
-  DateTime _weekMondayDate() {
-    final now = _taiwanNow;
-    return now.subtract(Duration(days: now.weekday - 1));
-  }
-
-  String _thisWeekMondayKey() {
-    final m = _weekMondayDate();
-    return '${m.month.toString().padLeft(2, '0')}/${m.day.toString().padLeft(2, '0')}';
-  }
-
-  _AdaptiveProjectionWeights _deriveAdaptiveWeights(List<DrawRecord> records) {
-    if (records.length < 5) {
-      return const _AdaptiveProjectionWeights(
-        mondayMissingWeight: 1.0,
-        streakWeight: 1.0,
-      );
-    }
-
-    final sorted = [...records]..sort((a, b) {
-      final ad = _toDate(a.date);
-      final bd = _toDate(b.date);
-      if (ad == null || bd == null) return 0;
-      return ad.compareTo(bd);
-    });
-
-    double mondayOpportunities = 0;
-    double mondaySuccess = 0;
-    double streakOpportunities = 0;
-    double streakSuccess = 0;
-
-    for (var i = 0; i < sorted.length; i++) {
-      final d = _toDate(sorted[i].date);
-      if (d == null) continue;
-      if (d.weekday != DateTime.monday) continue;
-
-      final key = sorted[i].date;
-      final entry = newspaper539Data[key];
-      if (entry == null) continue;
-      if (i + 1 >= sorted.length) continue;
-
-      final mondayCandidates = <int>{
-        entry.guZhi,
-        ...entry.erZhong,
-        ...entry.sanZhong,
-      };
-      final mondayDraw = sorted[i].numbers.toSet();
-      final missing = mondayCandidates.difference(mondayDraw).toList();
-      if (missing.isNotEmpty) {
-        mondayOpportunities += missing.length;
-      }
-
-      final followUnion = <int>{};
-      for (var j = i + 1; j <= i + 3 && j < sorted.length; j++) {
-        followUnion.addAll(sorted[j].numbers);
-      }
-      mondaySuccess += missing.where((n) => followUnion.contains(n)).length;
-
-      // 連莊延續回測：週一與週二重疊號，是否在週三/週四續開
-      final streakSeed = sorted[i].numbers.toSet().intersection(sorted[i + 1].numbers.toSet());
-      if (streakSeed.isNotEmpty) {
-        streakOpportunities += streakSeed.length;
-      }
-      final streakFollow = <int>{};
-      for (var j = i + 2; j <= i + 3 && j < sorted.length; j++) {
-        streakFollow.addAll(sorted[j].numbers);
-      }
-      streakSuccess += streakSeed.where((n) => streakFollow.contains(n)).length;
-    }
-
-    final missingRate = mondayOpportunities > 0 ? (mondaySuccess / mondayOpportunities) : 0.35;
-    final streakRate = streakOpportunities > 0 ? (streakSuccess / streakOpportunities) : 0.35;
-
-    return _AdaptiveProjectionWeights(
-      mondayMissingWeight: _rateToWeight(missingRate),
-      streakWeight: _rateToWeight(streakRate),
-    );
-  }
-
-  DateTime? _toDate(String mmdd) {
-    final m = RegExp(r'^(\d{2})/(\d{2})$').firstMatch(mmdd);
-    if (m == null) return null;
-    final month = int.tryParse(m.group(1)!);
-    final day = int.tryParse(m.group(2)!);
-    if (month == null || day == null) return null;
-    final year = _taiwanNow.year;
-    try {
-      return DateTime(year, month, day);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  double _rateToWeight(double rate) {
-    if (rate >= 0.60) return 1.35;
-    if (rate >= 0.50) return 1.20;
-    if (rate >= 0.40) return 1.08;
-    if (rate < 0.25) return 0.80;
-    if (rate < 0.35) return 0.92;
-    return 1.0;
-  }
-
-  // ── 紅框輸入區 ─────────────────────────────────────────────────
-
-  Widget _hintSection() {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Column(
-        children: [
-          GestureDetector(
-            onTap: () =>
-                setState(() => _showHintInput = !_showHintInput),
-            child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              color: Colors.black.withAlpha(55),
-              child: Row(
-                children: [
-                  const Icon(Icons.auto_fix_high_rounded,
-                      size: 16, color: _gold),
-                  const SizedBox(width: 6),
-                  Text(
-                    '輸入今日神卦號碼（選填）',
-                    style: TextStyle(
-                        fontSize: 13, color: _gold.withAlpha(218)),
-                  ),
-                  const Spacer(),
-                  Icon(
-                    _showHintInput
-                        ? Icons.expand_less
-                        : Icons.expand_more,
-                    color: _goldAlt,
-                    size: 18,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (_showHintInput)
-            Container(
-              padding: const EdgeInsets.all(14),
-              color: Colors.black.withAlpha(45),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '未開出的號碼將在前後 3 期內追蹤開出，自動累積加分',
-                    style: TextStyle(
-                        fontSize: 11, color: Colors.orange.withAlpha(218)),
-                  ),
-                  const SizedBox(height: 12),
-                  // ── 孤支 ───────────────────────────────────────
-                  _hintRow(
-                    label: '孤支',
-                    badge: '+165',
-                    hint: '例：12',
-                    controller: _guzhiCtrl,
-                    maxLen: 2,
-                  ),
-                  const SizedBox(height: 10),
-                  // ── 二中一 ─────────────────────────────────────
-                  _hintRow(
-                    label: '二中一',
-                    badge: '+105',
-                    hint: '例：28, 37',
-                    controller: _erzhongCtrl,
-                    maxLen: 5,
-                  ),
-                  const SizedBox(height: 10),
-                  // ── 三中一 ─────────────────────────────────────
-                  _hintRow(
-                    label: '三中一',
-                    badge: '+80',
-                    hint: '例：04, 19, 21',
-                    controller: _sanzhongCtrl,
-                    maxLen: 8,
-                  ),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: GestureDetector(
-                      onTap: () {
-                        FocusScope.of(context).unfocus();
-                        _load();
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(vertical: 9),
-                        decoration: BoxDecoration(
-                          color: _gold,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: const Text(
-                          '套用分析',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                              color: Colors.black,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 14),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _hintRow({
-    required String label,
-    required String badge,
-    required String hint,
-    required TextEditingController controller,
-    required int maxLen,
-  }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Container(
-          width: 52,
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          decoration: BoxDecoration(
-            border: Border.all(color: _gold.withAlpha(180)),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Column(
-            children: [
-              Text(label,
-                  style: const TextStyle(
-                      color: _gold, fontWeight: FontWeight.w700, fontSize: 12)),
-              Text(badge,
-                  style: TextStyle(
-                      color: _gold.withAlpha(180), fontSize: 10)),
-            ],
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: TextField(
-            controller: controller,
-            keyboardType: TextInputType.numberWithOptions(
-                decimal: false, signed: false),
-            inputFormatters: [
-              FilteringTextInputFormatter.allow(RegExp(r'[\d,\s]')),
-            ],
-            maxLength: maxLen,
-            style: const TextStyle(color: Colors.white, fontSize: 14),
-            cursorColor: _gold,
-            decoration: InputDecoration(
-              hintText: hint,
-              hintStyle: TextStyle(
-                  color: Colors.white.withAlpha(77), fontSize: 12),
-              counterText: '',
-              enabledBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: Color(0x55FFD700)),
-              ),
-              focusedBorder: const UnderlineInputBorder(
-                borderSide: BorderSide(color: _gold),
-              ),
-              isDense: true,
-              contentPadding: const EdgeInsets.symmetric(vertical: 6),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ── 推薦號碼列 ────────────────────────────────────────────────────
-
-
-class _FiveDayProjection {
-  const _FiveDayProjection({
-    required this.mondayMissing,
-    required this.streakWatch,
-    required this.nextThreeDays,
-    required this.weights,
-  });
-
-  final List<int> mondayMissing;
-  final List<int> streakWatch;
-  final Map<String, List<int>> nextThreeDays;
-  final _AdaptiveProjectionWeights weights;
-}
-
-class _AdaptiveProjectionWeights {
-  const _AdaptiveProjectionWeights({
-    required this.mondayMissingWeight,
-    required this.streakWeight,
-  });
-
-  final double mondayMissingWeight;
-  final double streakWeight;
 }
 
 // ── 開獎號碼輸入格 ────────────────────────────────────────────────

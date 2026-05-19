@@ -57,9 +57,168 @@ class PangPangApp extends StatelessWidget {
           labelStyle: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
         ),
       ),
-      // 設定初始進入頁面為具備導覽功能的主分頁，找回以前的感覺
-      home: const MainNavigationScreen(),
+      home: const _DisclaimerWrapper(),
     );
   }
 }
 
+class _DisclaimerWrapper extends StatefulWidget {
+  const _DisclaimerWrapper();
+  @override
+  State<_DisclaimerWrapper> createState() => _DisclaimerWrapperState();
+}
+
+class _DisclaimerWrapperState extends State<_DisclaimerWrapper> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showDisclaimer());
+  }
+
+  void _showDisclaimer() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Dialog(
+        backgroundColor: const Color(0xFF0D1E4A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('⚾', style: TextStyle(fontSize: 48)),
+              const SizedBox(height: 12),
+              const Text(
+                '胖胖體育',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: Color(0xFFFFD700),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Color(0xFF1A2F5E),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Color(0xFFFFD700).withAlpha(80), width: 1),
+                ),
+                child: const Text(
+                  '⚠️  免責聲明\n\n本應用程式所有內容均為統計模型預測，'
+                  '不構成任何投注建議。\n\n'
+                  '以上皆為預測，盈虧自負。',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.white,
+                    height: 1.6,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFD700),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text(
+                    '我已了解，進入應用',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => const MainNavigationScreen();
+}
+
+class PasswordLockScreen extends StatefulWidget {
+  const PasswordLockScreen({super.key});
+
+  @override
+  State<PasswordLockScreen> createState() => _PasswordLockScreenState();
+}
+
+class _PasswordLockScreenState extends State<PasswordLockScreen> {
+  bool isAuthorized = false;
+  final TextEditingController _passwordController = TextEditingController();
+  
+  // 🎯 在這裡設定你想要的密碼，目前預設是 Boxeo@881219@Boxing24614360
+  final String correctPassword = "Boxeo@881219@Boxing24614360"; 
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isAuthorized) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF121212),
+        body: Center(
+          child: Container(
+            padding: const EdgeInsets.all(32),
+            constraints: const BoxConstraints(maxWidth: 360),
+            child: Column(
+              mainAxisAlignment: MainCDATAAlignment = MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.security, size: 70, color: Colors.orangeAccent),
+                const SizedBox(height: 20),
+                const Text(
+                  "Pang Pang Sport 內部系統",
+                  style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 30),
+                TextField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    labelText: "請輸入存取密碼",
+                    labelStyle: TextStyle(color: Colors.grey),
+                    focusedBorder: OutlineInputBorder(borderSide: BorderSide(color: Colors.orangeAccent)),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                SizedBox(
+                  width: double.infinity,
+                  height: 45,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
+                    onPressed: () {
+                      if (_passwordController.text == correctPassword) {
+                        setState(() {
+                          isAuthorized = true;
+                        });
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(backgroundColor: Colors.redAccent, content: Text("密碼錯誤！")),
+                        );
+                      }
+                    },
+                    child: const Text("驗證並登入", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    
+    // 🔑 解鎖成功後，直接進入你原本包裝好的免責聲明主畫面
+    return const DisclaimerWrapper(); 
+  }
+}

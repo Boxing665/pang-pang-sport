@@ -240,7 +240,10 @@ class BingoService {
 
   // ── 公開：分析統計 ────────────────────────────────────────────
 
-  static BingoPrediction analyze(List<BingoRecord> records, {int seed = 0}) {
+  /// strategyMode: 'balanced'（預設）| 'frequency'（熱號）| 'gap'（冷號）| 'transition'（轉移矩陣）
+  /// 由 SelfLearningService.getRecommendedBingoStrategy() 在呼叫前取得並傳入
+  static BingoPrediction analyze(List<BingoRecord> records,
+      {int seed = 0, String strategyMode = 'balanced'}) {
     if (records.isEmpty) {
       return const BingoPrediction(
         stats: {},
@@ -254,12 +257,14 @@ class BingoService {
       );
     }
 
-    final N = records.length;
+    // 最多只用最近 60 局做分析（速度優化：過舊資料對預測貢獻極低）
+    final workRecords = records.length > 60 ? records.sublist(0, 60) : records;
+    final N = workRecords.length;
     final rawFreq = <int, int>{for (var n = 1; n <= 80; n++) n: 0};
     final lastSeen = <int, int>{};
 
     for (var i = 0; i < N; i++) {
-      for (final n in records[i].numbers) {
+      for (final n in workRecords[i].numbers) {
         rawFreq[n] = rawFreq[n]! + 1;
         lastSeen[n] ??= i;
       }
@@ -271,12 +276,11 @@ class BingoService {
     };
 
     // ── 指數衰減頻率：近期自然遞減，half-life ≈ 11 局 ─────────────
-    // weight[i] = e^(-0.06 * i)，比分段窗口更平滑，不產生邊界跳躍
     const decayRate = 0.06;
     final expWeighted = <int, double>{for (var n = 1; n <= 80; n++) n: 0.0};
     for (var i = 0; i < N; i++) {
       final w = exp(-decayRate * i);
-      for (final n in records[i].numbers) {
+      for (final n in workRecords[i].numbers) {
         expWeighted[n] = expWeighted[n]! + w;
       }
     }
@@ -301,13 +305,12 @@ class BingoService {
 
     // ── 拖牌預測強化 (Next-Draw Tuo Pai) ─────────────────────────
     final tuoPaiStats = <int, double>{for (var n = 1; n <= 80; n++) n: 0.0};
-    if (records.length >= 2) {
-      final lastNumbers = records.first.numbers;
-      // 分析歷史中，只要出現過上期這20個號碼，下一期會開什麼
-      for (int i = records.length - 1; i > 0; i--) {
-        final prevMatchCount = records[i].numbers.where((n) => lastNumbers.contains(n)).length;
-        if (prevMatchCount >= 5) { // 當歷史某期與上期重合度高時，參考價值更大
-          final nextDraw = records[i - 1].numbers;
+    if (workRecords.length >= 2) {
+      final lastNumbers = workRecords.first.numbers;
+      for (int i = workRecords.length - 1; i > 0; i--) {
+        final prevMatchCount = workRecords[i].numbers.where((n) => lastNumbers.contains(n)).length;
+        if (prevMatchCount >= 5) {
+          final nextDraw = workRecords[i - 1].numbers;
           for (final n in nextDraw) {
             tuoPaiStats[n] = (tuoPaiStats[n] ?? 0.0) + (prevMatchCount / 20.0);
           }
@@ -335,7 +338,7 @@ class BingoService {
 
     // ── 共同開獎配對 ──────────────────────────────────────────────
     final pairCount = <int, int>{};
-    for (final r in records) {
+    for (final r in workRecords) {
       final nums = List<int>.from(r.numbers)..sort();
       for (var i = 0; i < nums.length; i++) {
         for (var j = i + 1; j < nums.length; j++) {
@@ -354,11 +357,11 @@ class BingoService {
         )).toList();
 
     // ── 同出模式（先算，供評分系統使用）──────────────────────────
-    final twoCombos = _computeComboStats(records, size: 2, top: 12);
-    final threeCombos = _computeComboStats(records, size: 3, top: 12);
-    final fourCombos = _computeComboStats(records, size: 4, top: 12);
-    final bigSmall = _computeBalancePatterns(records, oddEven: false, top: 10);
-    final oddEven = _computeBalancePatterns(records, oddEven: true, top: 10);
+    final twoCombos = _computeComboStats(workRecords, size: 2, top: 12);
+    final threeCombos = _computeComboStats(workRecords, size: 3, top: 12);
+    final fourCombos = _computeComboStats(workRecords, size: 4, top: 12);
+    final bigSmall = _computeBalancePatterns(workRecords, oddEven: false, top: 10);
+    final oddEven = _computeBalancePatterns(workRecords, oddEven: true, top: 10);
 
     // ══════════════════════════════════════════════════════════════
     //  多維度評分：拖牌法 + 同出到期 + 個人間隔到期 + 近期熱度
@@ -368,17 +371,14 @@ class BingoService {
     final predictScores = <int, double>{for (var n = 1; n <= 80; n++) n: 0.0};
 
     // ── Part 1: 拖牌法（Lag-N 轉移概率）──────────────────────────
-    // 對 lag=1..10：「lag 期前出現的號碼 A」→「當期出現的號碼 B」
-    // 統計歷史轉移概率，套用到當前各 lag 期的號碼，預測下一期
-    final maxLag = min(10, records.length - 1);
+    final maxLag = min(10, N - 1);
     for (var lag = 1; lag <= maxLag; lag++) {
       final fromToCount = <int, Map<int, int>>{};
       final fromTotal = <int, int>{};
 
-      // 建立此 lag 的歷史轉移頻率表
-      for (var i = 0; i + lag < records.length; i++) {
-        final fromNums = records[i + lag].numbers; // lag 期前出現的號碼
-        final toSet = records[i].numbers.toSet();  // 隨後（當期）出現的號碼
+      for (var i = 0; i + lag < N; i++) {
+        final fromNums = workRecords[i + lag].numbers;
+        final toSet = workRecords[i].numbers.toSet();
         for (final from in fromNums) {
           fromTotal[from] = (fromTotal[from] ?? 0) + 1;
           fromToCount.putIfAbsent(from, () => {});
@@ -388,16 +388,16 @@ class BingoService {
         }
       }
 
-      // 套用到當前狀態：records[lag-1] = 距今 lag 期前的那一注
-      if (lag - 1 >= records.length) continue;
-      final lagWeight = 1.0 / lag; // 越近期的拖牌權重越高
-      for (final fromNum in records[lag - 1].numbers) {
+      if (lag - 1 >= N) continue;
+      final lagWeight = 1.0 / lag;
+      for (final fromNum in workRecords[lag - 1].numbers) {
         final total = fromTotal[fromNum] ?? 0;
-        if (total < 5) continue; // 至少 5 次樣本才採計（更可靠）
+        if (total < 5) continue;
         final toMap = fromToCount[fromNum] ?? {};
         for (final entry in toMap.entries) {
           final rate = entry.value / total;
-          if (rate >= 0.20) { // 命中率 ≥ 20%（隨機基線 25%，此門檻抓相對高頻）
+          // 閾值降低至 0.15（超過隨機基準 20/80=25%... 的 60%即算有效訊號）
+          if (rate >= 0.15) {
             predictScores[entry.key] = (predictScores[entry.key] ?? 0) +
                 rate * lagWeight * 20.0;
           }
@@ -409,6 +409,25 @@ class BingoService {
     final dragSorted = predictScores.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     final dragPrediction = dragSorted.take(6).map((e) => e.key).toList()..sort();
+
+    // ── 自適應策略倍率（由 SelfLearningService 根據命中率選出）────────────
+    // 各 Part 的基礎權重乘以對應策略倍率，實現「失敗就換套路」
+    final wTransition = strategyMode == 'transition' ? 1.8
+        : strategyMode == 'frequency'  ? 0.6
+        : strategyMode == 'gap'        ? 0.7
+        : 1.0; // balanced
+    final wGap = strategyMode == 'gap'        ? 2.2
+        : strategyMode == 'transition' ? 0.6
+        : strategyMode == 'frequency'  ? 0.5
+        : 1.0;
+    final wHeat = strategyMode == 'frequency' ? 2.0
+        : strategyMode == 'gap'        ? 0.5
+        : strategyMode == 'transition' ? 0.7
+        : 1.0;
+    // 重新套用自適應倍率（覆蓋 Part 1 的拖牌法分數）
+    for (var n = 1; n <= 80; n++) {
+      predictScores[n] = predictScores[n]! * wTransition;
+    }
 
     // ── Part 2: 同出到期（suggestAfter==0 = 已超過平均間隔，建議下期出）
     for (final combo in twoCombos) {
@@ -436,25 +455,23 @@ class BingoService {
       }
     }
 
-    // ── Part 3: 個人間隔到期 ───────────────────────────────────────
-    // 每個號碼有自己的平均間隔；超過自身均值才是真正「到點」
+    // ── Part 3: 個人間隔到期（wGap 倍率：gap 策略強化）────────────
     for (var n = 1; n <= 80; n++) {
       final s = statsMap[n]!;
       if (s.gap >= s.avgGap) {
         final overdue = (s.gap - s.avgGap).clamp(0.0, 20.0);
-        predictScores[n] = (predictScores[n] ?? 0) + overdue * 1.5;
+        predictScores[n] = (predictScores[n] ?? 0) + overdue * 1.5 * wGap;
       }
     }
 
-    // ── Part 4: 指數衰減熱度加成 ──────────────────────────────────
+    // ── Part 4: 指數衰減熱度加成（wHeat 倍率：frequency 策略強化）──
     for (var n = 1; n <= 80; n++) {
-      predictScores[n] = (predictScores[n] ?? 0) + statsMap[n]!.heatScore * 8.0;
+      predictScores[n] = (predictScores[n] ?? 0) + statsMap[n]!.heatScore * 8.0 * wHeat;
     }
 
     // ── Part 5: 連開熱勢（近 5 期高頻號碼）─────────────────────────
-    // 若一個號碼在最近 5 期出現 ≥ 3 次，說明它處於「熱勢」中，大幅加分
     final streak5 = <int, int>{for (var n = 1; n <= 80; n++) n: 0};
-    for (final r in records.take(5)) {
+    for (final r in workRecords.take(5)) {
       for (final n in r.numbers) {
         streak5[n] = streak5[n]! + 1;
       }
@@ -472,7 +489,7 @@ class BingoService {
     final zoneCount = List.filled(8, 0.0);
     for (var i = 0; i < min(10, N); i++) {
       final w = exp(-0.10 * i);
-      for (final n in records[i].numbers) {
+      for (final n in workRecords[i].numbers) {
         zoneCount[(n - 1) ~/ 10] += w;
       }
     }
@@ -485,11 +502,11 @@ class BingoService {
     // ── Part 7: 相生相剋（共現親合力）──────────────────────────
     // 相生：與已得分前20名高度共現的號碼額外加分
     // 相剋：與前20名共現率極低的號碼小幅扣分（避免組出歷史少見組合）
-    // 共現矩陣（取近50局避免計算量過大）
-    final coLimit = min(50, N);
+    // 共現矩陣（取近 30 局，速度優化）
+    final coLimit = min(30, N);
     final coOccur = <int, Map<int, int>>{};
     for (var i = 0; i < coLimit; i++) {
-      final nums = records[i].numbers;
+      final nums = workRecords[i].numbers;
       for (var j = 0; j < nums.length; j++) {
         for (var k = j + 1; k < nums.length; k++) {
           final a = nums[j], b = nums[k];
@@ -527,14 +544,11 @@ class BingoService {
     }
 
     // ── Part 8: 歷史命中強化（反饋學習）──────────────────────────
-    // 對最近 5 期做快速回測：找出演算法「成功預測到的號碼」（在 top-15 且實際開出）
-    // 這些號碼代表「演算法信號有效的號碼」，在本期預測中追加獎勵
-    if (records.length >= 6) {
-      for (var lag = 1; lag <= min(5, records.length - 1); lag++) {
-        final hist = records.sublist(lag); // lag 期前的歷史
+    if (N >= 6) {
+      for (var lag = 1; lag <= min(5, N - 1); lag++) {
+        final hist = workRecords.sublist(lag);
         if (hist.length < 15) break;
 
-        // 快速拖牌得分（只用 lag=1，輕量計算）
         final qs = <int, double>{for (var n = 1; n <= 80; n++) n: 0.0};
         final prev = hist[0].numbers;
         final fromTotal = <int, int>{};
@@ -555,20 +569,16 @@ class BingoService {
             qs[e.key] = qs[e.key]! + e.value / tot;
           }
         }
-        // 加上近期熱度
         for (var n = 1; n <= 80; n++) {
           qs[n] = qs[n]! + statsMap[n]!.heatScore * 3.0;
         }
 
-        // 取 top-15 作為「當時預測候選」
         final qSorted = qs.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
         final predicted = qSorted.take(15).map((e) => e.key).toSet();
-        // 對照 lag 期前的實際開獎
-        final actualSet = records[lag - 1].numbers.toSet();
+        final actualSet = workRecords[lag - 1].numbers.toSet();
         final hits = predicted.intersection(actualSet);
 
-        // 命中的號碼在本期獲得遞減加分（越近期加分越高）
         final reward = exp(-0.35 * (lag - 1)) * 7.0;
         for (final h in hits) {
           predictScores[h] = predictScores[h]! + reward;
@@ -576,10 +586,27 @@ class BingoService {
       }
     }
 
-    // ── 選出綜合得分最高的 6 顆 ──────────────────────────────────
+    // ── 選出綜合得分最高的 6 顆（加入區間多樣性：每個十位區間最多 2 顆）──
+    // 賓果 1-80 分 8 個十位區間；限制每區最多 2 顆，確保覆蓋不同區段
     final finalSorted = predictScores.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-    final recommended = finalSorted.take(6).map((e) => e.key).toList()..sort();
+    final recommended = <int>[];
+    final recZoneUsed = <int, int>{};
+    for (final e in finalSorted) {
+      if (recommended.length >= 6) break;
+      final z = (e.key - 1) ~/ 10;
+      final used = recZoneUsed[z] ?? 0;
+      if (used < 2) {
+        recommended.add(e.key);
+        recZoneUsed[z] = used + 1;
+      }
+    }
+    // 若受區間限制不足 6 顆，補滿（放鬆限制）
+    for (final e in finalSorted) {
+      if (recommended.length >= 6) break;
+      if (!recommended.contains(e.key)) recommended.add(e.key);
+    }
+    recommended.sort();
 
     // ── 策略描述 ───────────────────────────────────────────────────
     final hasDueCombo = [...twoCombos, ...threeCombos, ...fourCombos]
@@ -601,7 +628,7 @@ class BingoService {
       coldNumbers: coldNumbers,
       recommended: recommended,
       topPairs: topPairs,
-      nextDrawNo: records.first.drawNo + 1,
+      nextDrawNo: workRecords.first.drawNo + 1,
       strategy: strategy,
       analyzedDraws: N,
       carryOverNumbers: dragPrediction,
