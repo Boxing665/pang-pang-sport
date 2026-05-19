@@ -219,6 +219,7 @@ class _PasswordLockScreenState extends State<PasswordLockScreen> {
     }
     
     // 🔑 解鎖成功後，直接進入你原本的免責聲明主畫面
-    return const DisclaimerWrapper(); 
+    return DisclaimerWrapper();
+ 
   }
 }
