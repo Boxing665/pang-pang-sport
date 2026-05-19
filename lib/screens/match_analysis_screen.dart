@@ -4,6 +4,7 @@ import '../models/match_fixture.dart';
 import '../models/match_prediction.dart';
 import '../models/sport_type.dart';
 import '../services/real_data_service.dart';
+import '../services/sports_news_service.dart';
 import '../theme/app_theme.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -34,6 +35,8 @@ class _MatchAnalysisScreenState extends State<MatchAnalysisScreen> {
   List<Map<String, dynamic>> _homeRecentMatches = [];
   List<Map<String, dynamic>> _awayRecentMatches = [];
   List<Map<String, dynamic>> _h2hMatches = [];
+  List<NewsItem> _homeNews = [];
+  List<NewsItem> _awayNews = [];
   bool _loaded = false;
 
   @override
@@ -54,10 +57,13 @@ class _MatchAnalysisScreenState extends State<MatchAnalysisScreen> {
       RealDataService.fetchTeamRecentMatchDetails(homeId, f.sport, slug),
       RealDataService.fetchTeamRecentMatchDetails(awayId, f.sport, slug),
       RealDataService.fetchH2HMatchDetails(eventId, f.sport, slug),
+      if (homeId.isNotEmpty) SportsNewsService.fetchTeamNews(homeId, f.sport)
+      else Future.value(<NewsItem>[]),
+      if (awayId.isNotEmpty) SportsNewsService.fetchTeamNews(awayId, f.sport)
+      else Future.value(<NewsItem>[]),
     ]);
 
     var h2h = results[4] as List<Map<String, dynamic>>;
-    // ESPN summary 無 headToHead 時改用賽程交叉比對
     if (h2h.isEmpty && homeId.isNotEmpty && awayId.isNotEmpty) {
       h2h = await RealDataService.fetchH2HFromSchedules(homeId, awayId, f.sport, slug);
     }
@@ -69,6 +75,8 @@ class _MatchAnalysisScreenState extends State<MatchAnalysisScreen> {
       _homeRecentMatches = results[2] as List<Map<String, dynamic>>;
       _awayRecentMatches = results[3] as List<Map<String, dynamic>>;
       _h2hMatches = h2h;
+      _homeNews = results[5] as List<NewsItem>;
+      _awayNews = results[6] as List<NewsItem>;
       _loaded = true;
     });
   }
@@ -95,6 +103,10 @@ class _MatchAnalysisScreenState extends State<MatchAnalysisScreen> {
                 _buildH2H(theme),
                 const SizedBox(height: 20),
                 _buildKeyFactors(theme),
+                if (_homeNews.isNotEmpty || _awayNews.isNotEmpty) ...[
+                  const SizedBox(height: 20),
+                  _buildNews(theme),
+                ],
                 const SizedBox(height: 20),
                 _buildFinalPrediction(theme),
               ]),
@@ -227,6 +239,67 @@ class _MatchAnalysisScreenState extends State<MatchAnalysisScreen> {
               const SizedBox(height: 6),
             ],
           ],
+        ),
+      ),
+    );
+  }
+
+  // ── 最新新聞 ─────────────────────────────────────────────────────────────────
+
+  Widget _buildNews(ThemeData theme) {
+    Widget newsRow(NewsItem n, String teamName) {
+      final icon = n.isNegative ? '⚠️' : n.isPositive ? '✅' : '📰';
+      final color = n.isNegative
+          ? Colors.redAccent.shade100
+          : n.isPositive
+              ? const Color(0xFF3DDC97)
+              : Colors.white70;
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(icon, style: const TextStyle(fontSize: 13)),
+            const SizedBox(width: 6),
+            Expanded(
+              child: RichText(
+                text: TextSpan(
+                  children: [
+                    TextSpan(
+                      text: '$teamName  ',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFFFFD700),
+                          fontWeight: FontWeight.w700),
+                    ),
+                    TextSpan(
+                      text: n.headline,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: color, height: 1.4),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final allNews = [
+      for (final n in _homeNews.take(3)) newsRow(n, f.homeTeam),
+      for (final n in _awayNews.take(3)) newsRow(n, f.awayTeam),
+    ];
+
+    return _Section(
+      title: '最新新聞',
+      icon: Icons.newspaper_rounded,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: _panelDecor(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: allNews,
         ),
       ),
     );

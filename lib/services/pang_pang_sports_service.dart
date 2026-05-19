@@ -18,6 +18,7 @@ import 'real_data_service.dart';
 import 'odds_api_service.dart';
 import 'lottery_service.dart';
 import 'bingo_service.dart';
+import 'sports_news_service.dart';
 
 // ============================================
 // 🎯 預測引擎相關類別
@@ -818,11 +819,16 @@ class PredictionEngine {
       // hasSpreadAndLine 時往市場方向再推一些，最多讓市場到 88%
       final boostIfSpread = hasSpreadAndLine ? 0.10 : 0.0;
       marketWeight = ((1.0 - baseAiW) + boostIfSpread).clamp(0.50, 0.90);
+    } else if (odds.overLine <= 0) {
+      // overLine 為 0 → 無真實盤口，用 baseTotalScore 混合只會拉向常數，改為純 AI
+      marketWeight = 0.0;
+      adaptiveStrategy = 'strategy_c';
     } else {
-      marketWeight = sport == SportType.football ? 0.55
-          : sport == SportType.basketball ? 0.52
-          : 0.40;
-      adaptiveStrategy = 'strategy_c'; // 無盤口 → AI 主導
+      // 有自行推算的 overLine（非零）但非真實博彩商 → 輕度混合
+      marketWeight = sport == SportType.football ? 0.45
+          : sport == SportType.basketball ? 0.40
+          : 0.30;
+      adaptiveStrategy = 'strategy_c';
     }
     final aiWeight = 1.0 - marketWeight;
 
@@ -2407,30 +2413,37 @@ class _MockDataService {
 
   List<MatchFixture> getTodaysFixtures() {
     final now = DateTime.now();
-    
+    final dateTag = '${now.year}${now.month.toString().padLeft(2,'0')}${now.day.toString().padLeft(2,'0')}';
+    // 日期驅動的每日微波動：讓同一對陣每天呈現不同狀態
+    final d = now.day;
+    final soccerDrift  = (d % 7 - 3) * 0.07;   // ±0.21 goals
+    final baseballDrift = (d % 9 - 4) * 0.15;  // ±0.60 runs
+    final nbaDrift      = (d % 11 - 5) * 1.2;  // ±6.0 pts
+    final cbaDrift      = (d % 11 - 5) * 1.0;  // ±5.0 pts
+
     debugPrint('📊 生成新模擬數據 - 當前時間: ${now.toIso8601String()}');
 
     return [
       MatchFixture(
-        id: 'soccer-j1-001',
+        id: 'soccer-j1-001-$dateTag',
         sport: SportType.football,
         league: '日本職業足球甲級聯賽',
         startTime: DateTime(now.year, now.month, now.day, 18, 0),
         homeTeam: '橫濱水手',
         awayTeam: '川崎前鋒',
-        homeForm: const TeamForm(
+        homeForm: TeamForm(
           teamName: '橫濱水手',
-          lastFiveResults: ['W', 'D', 'W', 'L', 'W'],
-          averageScored: 1.8,
-          averageConceded: 1.1,
+          lastFiveResults: const ['W', 'D', 'W', 'L', 'W'],
+          averageScored: (1.8 + soccerDrift).clamp(1.0, 2.8),
+          averageConceded: (1.1 - soccerDrift * 0.5).clamp(0.6, 1.8),
           injuries: 1,
           momentumScore: 7.8,
         ),
-        awayForm: const TeamForm(
+        awayForm: TeamForm(
           teamName: '川崎前鋒',
-          lastFiveResults: ['D', 'W', 'L', 'W', 'D'],
-          averageScored: 1.5,
-          averageConceded: 1.3,
+          lastFiveResults: const ['D', 'W', 'L', 'W', 'D'],
+          averageScored: (1.5 - soccerDrift * 0.6).clamp(0.8, 2.4),
+          averageConceded: (1.3 + soccerDrift * 0.4).clamp(0.7, 2.0),
           injuries: 2,
           momentumScore: 6.9,
         ),
@@ -2445,26 +2458,26 @@ class _MockDataService {
         analystNote: '台灣市場熱門對戰，主隊主場節奏積極，但川崎反擊效率仍具威脅。',
       ),
       MatchFixture(
-        id: 'baseball-cpbl-001',
+        id: 'baseball-cpbl-001-$dateTag',
         sport: SportType.baseball,
         league: '中華職棒',
         startTime: DateTime(now.year, now.month, now.day, 18, 35),
         homeTeam: '中信兄弟',
         awayTeam: '樂天桃猿',
-        homeForm: const TeamForm(
+        homeForm: TeamForm(
           teamName: '中信兄弟',
-          lastFiveResults: ['W', 'W', 'L', 'W', 'W', 'L', 'W', 'W', 'L', 'W'],
-          averageScored: 5.6,
-          averageConceded: 3.9,
+          lastFiveResults: const ['W', 'W', 'L', 'W', 'W', 'L', 'W', 'W', 'L', 'W'],
+          averageScored: (5.6 + baseballDrift).clamp(3.5, 7.5),
+          averageConceded: (3.9 - baseballDrift * 0.4).clamp(2.2, 5.8),
           injuries: 1,
           momentumScore: 8.1,
           hasRealStats: true,
         ),
-        awayForm: const TeamForm(
+        awayForm: TeamForm(
           teamName: '樂天桃猿',
-          lastFiveResults: ['L', 'W', 'W', 'L', 'W', 'L', 'W', 'W', 'L', 'W'],
-          averageScored: 5.1,
-          averageConceded: 4.6,
+          lastFiveResults: const ['L', 'W', 'W', 'L', 'W', 'L', 'W', 'W', 'L', 'W'],
+          averageScored: (5.1 - baseballDrift * 0.7).clamp(3.0, 7.0),
+          averageConceded: (4.6 + baseballDrift * 0.5).clamp(2.8, 6.5),
           injuries: 2,
           momentumScore: 7.2,
           hasRealStats: true,
@@ -2480,26 +2493,26 @@ class _MockDataService {
         analystNote: '兄弟牛棚穩定度較高，桃猿打線爆發力強，大小分關注度高。',
       ),
       MatchFixture(
-        id: 'basketball-nba-001',
+        id: 'basketball-nba-001-$dateTag',
         sport: SportType.basketball,
         league: 'NBA 美國職籃',
         startTime: DateTime(now.year, now.month, now.day, 10, 30),
         homeTeam: '洛杉磯湖人',
         awayTeam: '金州勇士',
-        homeForm: const TeamForm(
+        homeForm: TeamForm(
           teamName: '洛杉磯湖人',
-          lastFiveResults: ['W', 'W', 'W', 'L', 'W', 'W', 'L', 'W', 'W', 'L'],
-          averageScored: 114.8,
-          averageConceded: 109.6,
+          lastFiveResults: const ['W', 'W', 'W', 'L', 'W', 'W', 'L', 'W', 'W', 'L'],
+          averageScored: (114.8 + nbaDrift).clamp(100.0, 130.0),
+          averageConceded: (109.6 - nbaDrift * 0.5).clamp(98.0, 122.0),
           injuries: 2,
           momentumScore: 8.4,
           hasRealStats: true,
         ),
-        awayForm: const TeamForm(
+        awayForm: TeamForm(
           teamName: '金州勇士',
-          lastFiveResults: ['L', 'W', 'W', 'W', 'L', 'W', 'L', 'W', 'W', 'L'],
-          averageScored: 112.1,
-          averageConceded: 111.4,
+          lastFiveResults: const ['L', 'W', 'W', 'W', 'L', 'W', 'L', 'W', 'W', 'L'],
+          averageScored: (112.1 - nbaDrift * 0.6).clamp(98.0, 128.0),
+          averageConceded: (111.4 + nbaDrift * 0.4).clamp(100.0, 125.0),
           injuries: 1,
           momentumScore: 7.5,
           hasRealStats: true,
@@ -2515,25 +2528,25 @@ class _MockDataService {
         analystNote: '兩隊節奏都快，若外線手感升溫，比分有機會突破市場中位數。',
       ),
       MatchFixture(
-        id: 'soccer-j2-001',
+        id: 'soccer-j2-001-$dateTag',
         sport: SportType.football,
         league: '日本職業足球乙級聯賽',
         startTime: DateTime(now.year, now.month, now.day, 15, 0),
         homeTeam: '愛媛FC',
         awayTeam: '京都不死鳥',
-        homeForm: const TeamForm(
+        homeForm: TeamForm(
           teamName: '愛媛FC',
-          lastFiveResults: ['W', 'L', 'W', 'W', 'L'],
-          averageScored: 1.6,
-          averageConceded: 1.4,
+          lastFiveResults: const ['W', 'L', 'W', 'W', 'L'],
+          averageScored: (1.6 + soccerDrift * 0.8).clamp(0.8, 2.5),
+          averageConceded: (1.4 - soccerDrift * 0.4).clamp(0.7, 2.2),
           injuries: 0,
           momentumScore: 7.2,
         ),
-        awayForm: const TeamForm(
+        awayForm: TeamForm(
           teamName: '京都不死鳥',
-          lastFiveResults: ['D', 'W', 'D', 'L', 'W'],
-          averageScored: 1.5,
-          averageConceded: 1.2,
+          lastFiveResults: const ['D', 'W', 'D', 'L', 'W'],
+          averageScored: (1.5 - soccerDrift * 0.5).clamp(0.7, 2.4),
+          averageConceded: (1.2 + soccerDrift * 0.3).clamp(0.6, 2.0),
           injuries: 1,
           momentumScore: 6.8,
         ),
@@ -2548,26 +2561,26 @@ class _MockDataService {
         analystNote: '乙級聯賽對戰，雙方呈勢均力敵局面，比數可能偏低。',
       ),
       MatchFixture(
-        id: 'baseball-npb-001',
+        id: 'baseball-npb-001-$dateTag',
         sport: SportType.baseball,
         league: '日本職棒',
         startTime: DateTime(now.year, now.month, now.day, 17, 45),
         homeTeam: '讀賣巨人',
         awayTeam: '阪神虎',
-        homeForm: const TeamForm(
+        homeForm: TeamForm(
           teamName: '讀賣巨人',
-          lastFiveResults: ['L', 'W', 'W', 'W', 'L', 'W', 'L', 'W', 'W', 'L'],
-          averageScored: 4.3,
-          averageConceded: 3.8,
+          lastFiveResults: const ['L', 'W', 'W', 'W', 'L', 'W', 'L', 'W', 'W', 'L'],
+          averageScored: (4.3 + baseballDrift * 0.9).clamp(2.5, 6.5),
+          averageConceded: (3.8 - baseballDrift * 0.3).clamp(2.0, 5.5),
           injuries: 2,
           momentumScore: 6.8,
           hasRealStats: true,
         ),
-        awayForm: const TeamForm(
+        awayForm: TeamForm(
           teamName: '阪神虎',
-          lastFiveResults: ['W', 'W', 'L', 'W', 'W', 'L', 'W', 'W', 'L', 'W'],
-          averageScored: 4.8,
-          averageConceded: 3.4,
+          lastFiveResults: const ['W', 'W', 'L', 'W', 'W', 'L', 'W', 'W', 'L', 'W'],
+          averageScored: (4.8 - baseballDrift * 0.6).clamp(2.8, 7.0),
+          averageConceded: (3.4 + baseballDrift * 0.4).clamp(2.0, 5.5),
           injuries: 1,
           momentumScore: 7.6,
           hasRealStats: true,
@@ -2583,26 +2596,26 @@ class _MockDataService {
         analystNote: '阪神先發壓制力略優，巨人若前段局數無法上壘，總分可能偏低。',
       ),
       MatchFixture(
-        id: 'basketball-cba-001',
+        id: 'basketball-cba-001-$dateTag',
         sport: SportType.basketball,
         league: 'CBA 中國職籃',
         startTime: DateTime(now.year, now.month, now.day, 20, 0),
         homeTeam: '靴島浙江',
         awayTeam: '上海鯊魚',
-        homeForm: const TeamForm(
+        homeForm: TeamForm(
           teamName: '靴島浙江',
-          lastFiveResults: ['W', 'W', 'L', 'W', 'W', 'L', 'W', 'W', 'L', 'W'],
-          averageScored: 108.2,
-          averageConceded: 105.1,
+          lastFiveResults: const ['W', 'W', 'L', 'W', 'W', 'L', 'W', 'W', 'L', 'W'],
+          averageScored: (108.2 + cbaDrift).clamp(94.0, 124.0),
+          averageConceded: (105.1 - cbaDrift * 0.5).clamp(93.0, 118.0),
           injuries: 1,
           momentumScore: 8.1,
           hasRealStats: true,
         ),
-        awayForm: const TeamForm(
+        awayForm: TeamForm(
           teamName: '上海鯊魚',
-          lastFiveResults: ['L', 'W', 'W', 'L', 'W', 'L', 'W', 'W', 'L', 'W'],
-          averageScored: 105.4,
-          averageConceded: 107.8,
+          lastFiveResults: const ['L', 'W', 'W', 'L', 'W', 'L', 'W', 'W', 'L', 'W'],
+          averageScored: (105.4 - cbaDrift * 0.6).clamp(92.0, 120.0),
+          averageConceded: (107.8 + cbaDrift * 0.4).clamp(95.0, 122.0),
           injuries: 2,
           momentumScore: 7.0,
           hasRealStats: true,
@@ -3496,6 +3509,9 @@ class PangPangSportsService {
         _matchCache = realMatches;
         _matchCacheTime = DateTime.now();
 
+        // 背景預取各隊最新新聞（不阻塞 UI）
+        SportsNewsService.prefetchForFixtures(realMatches);
+
         // 🚀 成功後自動更新離線備援
         _saveToPersistentCache(realMatches);
 
@@ -3605,8 +3621,18 @@ class PangPangSportsService {
     final bias = _biasDataByType[fixture.sport];
     final mlWeights = RemoteConfigService().soccerWeightsNotifier.value;
     final lrCoeffs = _leagueRegressionCoeffs[fixture.league] ?? {};
+    final homeNewsMult = SportsNewsService.getNewsModifier(
+        fixture.homeForm.teamId, fixture.sport);
+    final awayNewsMult = SportsNewsService.getNewsModifier(
+        fixture.awayForm.teamId, fixture.sport);
     final result = _predictionEngine.predictScore(
-        fixture, bias: bias, mlWeights: mlWeights, linearRegressionCoeffs: lrCoeffs);
+      fixture,
+      bias: bias,
+      mlWeights: mlWeights,
+      linearRegressionCoeffs: lrCoeffs,
+      lineupHomeMultiplier: homeNewsMult,
+      lineupAwayMultiplier: awayNewsMult,
+    );
     _sessionPredCache[fixture.id] = result;
     return result;
   }
@@ -3618,8 +3644,11 @@ class PangPangSportsService {
     BaseballGameDetail? baseballDetail,
     SoccerGameDetail? soccerDetail,
   }) {
-    double homeMult = 1.0;
-    double awayMult = 1.0;
+    // 新聞修正係數（傷兵/利多訊號）
+    double homeMult = SportsNewsService.getNewsModifier(
+        fixture.homeForm.teamId, fixture.sport);
+    double awayMult = SportsNewsService.getNewsModifier(
+        fixture.awayForm.teamId, fixture.sport);
     final coreInjuryDetails = <String>[];
 
     switch (fixture.sport) {
@@ -3948,6 +3977,22 @@ class PangPangSportsService {
     if (allInjuryNotes.isNotEmpty) {
       prediction.keyFactors.insertAll(0, allInjuryNotes);
     }
+
+    // 注入新聞標題摘要（各隊最多 2 則）
+    final homeNews = SportsNewsService.getCachedNews(
+        fixture.homeForm.teamId, fixture.sport);
+    final awayNews = SportsNewsService.getCachedNews(
+        fixture.awayForm.teamId, fixture.sport);
+    final newsNotes = <String>[
+      for (final n in homeNews.take(2))
+        '${n.isNegative ? "⚠️" : n.isPositive ? "✅" : "📰"} ${fixture.homeTeam}：${n.headline}',
+      for (final n in awayNews.take(2))
+        '${n.isNegative ? "⚠️" : n.isPositive ? "✅" : "📰"} ${fixture.awayTeam}：${n.headline}',
+    ];
+    if (newsNotes.isNotEmpty) {
+      prediction.keyFactors.addAll(newsNotes);
+    }
+
     return prediction;
   }
 
