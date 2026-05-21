@@ -62,7 +62,7 @@ class SelfLearningService {
     if (lastRaw != null) {
       final last = DateTime.tryParse(lastRaw);
       if (last != null &&
-          DateTime.now().difference(last) < const Duration(hours: 1)) {
+          DateTime.now().difference(last) < const Duration(minutes: 30)) {
         return;
       }
     }
@@ -464,8 +464,9 @@ class SelfLearningService {
     await prefs.setString(_bingoStratKey, jsonEncode(data));
   }
 
-  /// 記錄賓果詳細命中（含區間統計），由 BingoScreen 在開獎後呼叫
-  static Future<void> recordBingoDetail({
+  /// 記錄賓果詳細命中（含區間統計），由 BingoScreen 在開獎後自動呼叫
+  /// 回傳 true 代表策略已自動切換（呼叫端可重新預測）
+  static Future<bool> recordBingoDetail({
     required int drawNo,
     required List<int> predicted,
     required List<int> actual,
@@ -504,6 +505,17 @@ class SelfLearningService {
     hlData['hits'] = hitList;
     hlData['lastDrawNo'] = drawNo;
     await prefs.setString(_bingoHitListKey, jsonEncode(hlData));
+
+    // ── 自動切換策略：近 5 局平均命中 < 1.5 顆 → 自動換策略 ─────────
+    if (hitList.length >= 5) {
+      final recent5 = hitList.sublist(hitList.length - 5);
+      final avg5 = recent5.reduce((a, b) => a + b) / 5.0;
+      if (avg5 < 1.5) {
+        await forceNextBingoStrategy();
+        return true; // 已自動切換
+      }
+    }
+    return false;
   }
 
   /// 取得各區間命中乘數（zone 0–7 → 0.85–1.20），供 BingoService 調整評分

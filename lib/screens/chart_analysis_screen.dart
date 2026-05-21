@@ -332,7 +332,7 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
                         children: [
                           _SportChartTab(logs: _sports),
                           _LotteryChartTab(logs: _lottery),
-                          _BingoChartTab(logs: _bingo, onForceLearn: _forceLearnBingo),
+                          _BingoChartTab(logs: _bingo),
                         ],
                       ),
               ),
@@ -444,21 +444,6 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
     );
   }
 
-  // ── 強制賓果換策略 ─────────────────────────────────────────────
-
-  Future<void> _forceLearnBingo() async {
-    if (_learning) return;
-    setState(() => _learning = true);
-    final next = await SelfLearningService.forceNextBingoStrategy();
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('🔄 賓果策略已切換 → $next'),
-        backgroundColor: const Color(0xFF0D1E4A),
-        duration: const Duration(seconds: 2),
-      ));
-    }
-    setState(() => _learning = false);
-  }
 
   Widget _header() => Padding(
         padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
@@ -690,8 +675,7 @@ class _LotteryChartTab extends StatelessWidget {
 
 class _BingoChartTab extends StatelessWidget {
   final List<PredictionLog> logs;
-  final VoidCallback? onForceLearn;
-  const _BingoChartTab({required this.logs, this.onForceLearn});
+  const _BingoChartTab({required this.logs});
 
   @override
   Widget build(BuildContext context) {
@@ -759,25 +743,15 @@ class _BingoChartTab extends StatelessWidget {
         const SizedBox(height: 8),
         _BingoZoneHitRate(predCount: predCount, drawnCount: drawnCount),
         const SizedBox(height: 8),
-        if (onForceLearn != null)
-          Align(
-            alignment: Alignment.centerRight,
-            child: GestureDetector(
-              onTap: onForceLearn,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withAlpha(30),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.orange.withAlpha(100)),
-                ),
-                child: const Text('🔄 命中率低？強制切換賓果策略',
-                    style: TextStyle(color: Colors.orange, fontSize: 11,
-                        fontWeight: FontWeight.w600)),
-              ),
-            ),
+        // 策略已由 SelfLearningService 自動管理，不需手動切換
+        Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: Text(
+            '💡 策略自動管理：近 5 局平均命中 < 1.5 顆時程式自動切換',
+            style: TextStyle(color: Colors.white38, fontSize: 10),
           ),
-        const SizedBox(height: 16),
+        ),
+        const SizedBox(height: 12),
 
         _sectionTitle('號碼熱度圖（綠=預測且開出 / 橙=預測未開 / 藍=未預測但開出）'),
         const SizedBox(height: 8),

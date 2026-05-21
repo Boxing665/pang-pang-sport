@@ -130,6 +130,7 @@ class _BingoScreenState extends State<BingoScreen>
     await _logSvc.autoReportBingoByDrawNo(byDrawNo);
 
     // 將最近一局的實際結果與預測比對，供 SelfLearningService 更新區間命中率
+    // 若命中率持續低落，recordBingoDetail 會自動切換策略並回傳 true
     if (records.isNotEmpty && _cachedPred != null) {
       final latestActual = records.first.numbers;
       final latestDrawNo = records.first.drawNo;
@@ -137,12 +138,17 @@ class _BingoScreenState extends State<BingoScreen>
       if (_lastRecordedDrawNo != latestDrawNo) {
         _lastRecordedDrawNo = latestDrawNo;
         final currentStrategy = await SelfLearningService.getRecommendedBingoStrategy();
-        await SelfLearningService.recordBingoDetail(
+        final switched = await SelfLearningService.recordBingoDetail(
           drawNo:    latestDrawNo,
           predicted: _cachedPred!.recommended + _cachedPred!.carryOverNumbers,
           actual:    latestActual,
           strategy:  currentStrategy,
         );
+        // 策略已自動切換 → 清除快取強制重新預測（不需使用者手動按）
+        if (switched) {
+          _cachedDrawNo = -1;
+          _cachedPred   = null;
+        }
       }
     }
 
@@ -199,8 +205,13 @@ class _BingoScreenState extends State<BingoScreen>
         if (mounted && _pred != null) _showPredictionAlert();
       } else if (_alerted && s > 180) {
         _alerted = false;
-        Future.delayed(const Duration(seconds: 15),
-            () { if (mounted) _load(forceRefresh: true); });
+        // 開獎後 15 秒自動刷新並觸發後台學習（無需使用者操作）
+        Future.delayed(const Duration(seconds: 15), () async {
+          if (!mounted) return;
+          await _load(forceRefresh: true);
+          // 後台自我學習：更新體育/大小分 Perceptron 權重
+          SelfLearningService.runInBackground(_logSvc).ignore();
+        });
       }
     });
   }
