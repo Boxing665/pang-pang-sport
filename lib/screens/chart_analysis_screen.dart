@@ -322,6 +322,7 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
             children: [
               _header(),
               _tabBarW(),
+              if (!_loading) _aiLearningCenter(),
               Expanded(
                 child: _loading
                     ? const Center(
@@ -331,7 +332,7 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
                         children: [
                           _SportChartTab(logs: _sports),
                           _LotteryChartTab(logs: _lottery),
-                          _BingoChartTab(logs: _bingo),
+                          _BingoChartTab(logs: _bingo, onForceLearn: _forceLearnBingo),
                         ],
                       ),
               ),
@@ -340,6 +341,123 @@ class _ChartAnalysisScreenState extends State<ChartAnalysisScreen>
         ),
       ),
     );
+  }
+
+  // ── AI 學習中心（所有分頁都顯示）────────────────────────────────
+
+  Widget _aiLearningCenter() {
+    final sports  = _sports;
+    final lottery = _lottery;
+    final bingo   = _bingo;
+
+    int judgedCount(List<PredictionLog> logs) =>
+        logs.where((l) => l.outcome != PredictionOutcome.pending).length;
+    double hitRate(List<PredictionLog> logs) {
+      final j = judgedCount(logs);
+      if (j == 0) return 0;
+      final c = logs.where((l) => l.outcome == PredictionOutcome.correct).length;
+      final p = logs.where((l) => l.outcome == PredictionOutcome.partial).length;
+      return (c + p * 0.5) / j;
+    }
+
+    final sRate = hitRate(sports);
+    final lRate = hitRate(lottery);
+    final bRate = hitRate(bingo);
+
+    Color rateColor(double r) =>
+        r >= 0.55 ? const Color(0xFF3DDC97) : r >= 0.40 ? Colors.orange : Colors.red.shade400;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(14, 0, 14, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withAlpha(8),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _gold.withAlpha(40)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Text('🤖 AI 學習中心',
+                  style: TextStyle(color: _gold, fontSize: 12, fontWeight: FontWeight.w700)),
+              const SizedBox(width: 6),
+              if (_learning)
+                const Row(children: [
+                  SizedBox(
+                    width: 9, height: 9,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.5, color: Color(0xFF3DDC97)),
+                  ),
+                  SizedBox(width: 4),
+                  Text('學習中', style: TextStyle(color: Color(0xFF3DDC97), fontSize: 10)),
+                ]),
+              const Spacer(),
+              GestureDetector(
+                onTap: _loading ? null : _triggerSelfLearning,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _cyan.withAlpha(30),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: _cyan.withAlpha(80)),
+                  ),
+                  child: const Text('全部重新學習',
+                      style: TextStyle(color: _cyan, fontSize: 10, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _miniRate('⚽🏀⚾', '體育', sRate, rateColor(sRate)),
+              const SizedBox(width: 8),
+              _miniRate('🎰', '539', lRate, rateColor(lRate)),
+              const SizedBox(width: 8),
+              _miniRate('🎱', '賓果', bRate, rateColor(bRate)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _miniRate(String icon, String label, double rate, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withAlpha(20),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withAlpha(60)),
+        ),
+        child: Column(children: [
+          Text('$icon $label',
+              style: const TextStyle(color: Colors.white60, fontSize: 10)),
+          const SizedBox(height: 2),
+          Text('${(rate * 100).round()}%',
+              style: TextStyle(
+                  color: color, fontSize: 14, fontWeight: FontWeight.w900)),
+        ]),
+      ),
+    );
+  }
+
+  // ── 強制賓果換策略 ─────────────────────────────────────────────
+
+  Future<void> _forceLearnBingo() async {
+    if (_learning) return;
+    setState(() => _learning = true);
+    final next = await SelfLearningService.forceNextBingoStrategy();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('🔄 賓果策略已切換 → $next'),
+        backgroundColor: const Color(0xFF0D1E4A),
+        duration: const Duration(seconds: 2),
+      ));
+    }
+    setState(() => _learning = false);
   }
 
   Widget _header() => Padding(
@@ -572,7 +690,8 @@ class _LotteryChartTab extends StatelessWidget {
 
 class _BingoChartTab extends StatelessWidget {
   final List<PredictionLog> logs;
-  const _BingoChartTab({required this.logs});
+  final VoidCallback? onForceLearn;
+  const _BingoChartTab({required this.logs, this.onForceLearn});
 
   @override
   Widget build(BuildContext context) {
@@ -607,6 +726,14 @@ class _BingoChartTab extends StatelessWidget {
           hint: '開啟賓果頁面即可自動儲存預測');
     }
 
+    // 計算每局命中數（用於趨勢圖）
+    final hitHistory = <int>[];
+    for (final l in judged.reversed) {
+      final pred   = _parseNums(l.predictedResult);
+      final actual = l.actualResult != null ? _parseNums(l.actualResult!).toSet() : <int>{};
+      hitHistory.add(pred.where((n) => actual.contains(n)).length);
+    }
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 32),
       children: [
@@ -618,6 +745,40 @@ class _BingoChartTab extends StatelessWidget {
             incorrect: incorrect,
             pending: pending),
         const SizedBox(height: 16),
+
+        // ── 命中趨勢折線 ──────────────────────────────────────────
+        if (hitHistory.length >= 3) ...[
+          _sectionTitle('命中數走勢（每局預測 6 個）'),
+          const SizedBox(height: 8),
+          _HitTrendChart(hitHistory: hitHistory),
+          const SizedBox(height: 16),
+        ],
+
+        // ── 區間命中率 + 強制換策略 ───────────────────────────────
+        _sectionTitle('區間命中率分析'),
+        const SizedBox(height: 8),
+        _BingoZoneHitRate(predCount: predCount, drawnCount: drawnCount),
+        const SizedBox(height: 8),
+        if (onForceLearn != null)
+          Align(
+            alignment: Alignment.centerRight,
+            child: GestureDetector(
+              onTap: onForceLearn,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withAlpha(30),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.orange.withAlpha(100)),
+                ),
+                child: const Text('🔄 命中率低？強制切換賓果策略',
+                    style: TextStyle(color: Colors.orange, fontSize: 11,
+                        fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ),
+        const SizedBox(height: 16),
+
         _sectionTitle('號碼熱度圖（綠=預測且開出 / 橙=預測未開 / 藍=未預測但開出）'),
         const SizedBox(height: 8),
         _BingoGrid(predCount: predCount, drawnCount: drawnCount),
@@ -1408,6 +1569,159 @@ class _BingoZoneStats extends StatelessWidget {
             ),
           );
         }).toList(),
+      ),
+    );
+  }
+}
+
+/// 賓果命中數走勢圖（每局預測 6 個中了幾個）
+class _HitTrendChart extends StatelessWidget {
+  final List<int> hitHistory; // 舊→新排列
+  const _HitTrendChart({required this.hitHistory});
+
+  @override
+  Widget build(BuildContext context) {
+    final recent = hitHistory.length > 20 ? hitHistory.sublist(hitHistory.length - 20) : hitHistory;
+    final maxH = 6;
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white.withAlpha(6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withAlpha(15)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            _legend(const Color(0xFF3DDC97), '≥3命中'),
+            const SizedBox(width: 10),
+            _legend(Colors.orange, '1-2命中'),
+            const SizedBox(width: 10),
+            _legend(Colors.red.shade400, '未命中'),
+          ]),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 60,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: recent.asMap().entries.map((e) {
+                final hits = e.value;
+                final frac = (hits / maxH).clamp(0.0, 1.0);
+                final color = hits >= 3
+                    ? const Color(0xFF3DDC97)
+                    : hits >= 1
+                        ? Colors.orange
+                        : Colors.red.shade400;
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 1),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        if (hits > 0)
+                          Text('$hits',
+                              style: TextStyle(color: color, fontSize: 7,
+                                  fontWeight: FontWeight.w700)),
+                        Container(
+                          height: 4 + 48 * frac,
+                          decoration: BoxDecoration(
+                            color: color.withAlpha(180),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 4),
+          Center(
+            child: Text(
+              '近 ${recent.length} 局  平均命中 ${recent.isEmpty ? 0 : (recent.reduce((a, b) => a + b) / recent.length).toStringAsFixed(1)} 個',
+              style: const TextStyle(color: Colors.white38, fontSize: 10),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _legend(Color c, String label) => Row(mainAxisSize: MainAxisSize.min, children: [
+    Container(width: 10, height: 10, decoration: BoxDecoration(color: c, shape: BoxShape.circle)),
+    const SizedBox(width: 3),
+    Text(label, style: const TextStyle(color: Colors.white54, fontSize: 9)),
+  ]);
+}
+
+/// 賓果區間命中率橫條（8 個區間 01-10 … 71-80）
+class _BingoZoneHitRate extends StatelessWidget {
+  final Map<int, int> predCount;
+  final Map<int, int> drawnCount;
+  const _BingoZoneHitRate({required this.predCount, required this.drawnCount});
+
+  static const _zoneLabels = ['01-10','11-20','21-30','31-40','41-50','51-60','61-70','71-80'];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white.withAlpha(6),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withAlpha(15)),
+      ),
+      child: Column(
+        children: List.generate(8, (z) {
+          final start = z * 10 + 1;
+          final end   = z * 10 + 10;
+          int pred = 0, hit = 0;
+          for (var n = start; n <= end; n++) {
+            if ((predCount[n] ?? 0) > 0) pred++;
+            if ((predCount[n] ?? 0) > 0 && (drawnCount[n] ?? 0) > 0) hit++;
+          }
+          final rate   = pred > 0 ? hit / pred : 0.0;
+          final color  = rate >= 0.35
+              ? const Color(0xFF3DDC97)
+              : rate >= 0.20
+                  ? Colors.orange
+                  : Colors.red.shade400;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 5),
+            child: Row(children: [
+              SizedBox(
+                width: 48,
+                child: Text(_zoneLabels[z],
+                    style: const TextStyle(color: Colors.white54, fontSize: 10)),
+              ),
+              Expanded(
+                child: Stack(children: [
+                  Container(height: 10,
+                      decoration: BoxDecoration(
+                          color: Colors.white.withAlpha(12),
+                          borderRadius: BorderRadius.circular(5))),
+                  FractionallySizedBox(
+                    widthFactor: rate.clamp(0.0, 1.0),
+                    child: Container(
+                        height: 10,
+                        decoration: BoxDecoration(
+                            color: color.withAlpha(200),
+                            borderRadius: BorderRadius.circular(5))),
+                  ),
+                ]),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 52,
+                child: Text('$hit/$pred  ${(rate*100).round()}%',
+                    style: TextStyle(color: color, fontSize: 10,
+                        fontWeight: FontWeight.w700)),
+              ),
+            ]),
+          );
+        }),
       ),
     );
   }

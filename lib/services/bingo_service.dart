@@ -289,9 +289,12 @@ class BingoService {
   // ── 公開：分析統計 ────────────────────────────────────────────
 
   /// strategyMode: 'balanced'（預設）| 'frequency'（熱號）| 'gap'（冷號）| 'transition'（轉移矩陣）
+  /// zoneMultipliers: zone 0–7 的命中乘數（由 SelfLearningService.getBingoZoneMultipliers() 傳入）
   /// 由 SelfLearningService.getRecommendedBingoStrategy() 在呼叫前取得並傳入
   static BingoPrediction analyze(List<BingoRecord> records,
-      {int seed = 0, String strategyMode = 'balanced'}) {
+      {int seed = 0,
+      String strategyMode = 'balanced',
+      Map<int, double> zoneMultipliers = const {}}) {
     if (records.isEmpty) {
       return const BingoPrediction(
         stats: {},
@@ -515,6 +518,15 @@ class BingoService {
     // ── Part 4: 指數衰減熱度加成（wHeat 倍率：frequency 策略強化）──
     for (var n = 1; n <= 80; n++) {
       predictScores[n] = (predictScores[n] ?? 0) + statsMap[n]!.heatScore * 8.0 * wHeat;
+    }
+
+    // ── Part 4b: 圖表命中率區間乘數（來自 SelfLearningService 歷史命中回饋）──
+    if (zoneMultipliers.isNotEmpty) {
+      for (var n = 1; n <= 80; n++) {
+        final z    = (n - 1) ~/ 10;
+        final mult = zoneMultipliers[z] ?? 1.0;
+        predictScores[n] = predictScores[n]! * mult;
+      }
     }
 
     // ── Part 5: 連開熱勢（近 5 期高頻號碼）─────────────────────────
@@ -888,6 +900,52 @@ class BingoService {
         hitsHistory: hits,
       )
     ];
+  }
+
+  // ── 開獎型態分析（Draw Pattern Analysis）────────────────────────
+
+  /// 計算每一局的區間分布（zone 0–7，每區10球）
+  /// 回傳：每局的 8 個區間各開出幾球，最新一局在 index 0
+  static List<List<int>> drawZoneProfiles(List<BingoRecord> records, {int limit = 20}) {
+    return records.take(limit).map((r) {
+      final zones = List.filled(8, 0);
+      for (final n in r.numbers) {
+        zones[(n - 1) ~/ 10]++;
+      }
+      return zones;
+    }).toList();
+  }
+
+  /// 計算近 N 局各區間的平均開出球數
+  static List<double> avgZoneDistribution(List<BingoRecord> records, {int limit = 30}) {
+    if (records.isEmpty) return List.filled(8, 0);
+    final profiles = drawZoneProfiles(records, limit: limit);
+    final totals = List.filled(8, 0.0);
+    for (final p in profiles) {
+      for (var z = 0; z < 8; z++) { totals[z] += p[z]; }
+    }
+    return List.generate(8, (z) => totals[z] / profiles.length);
+  }
+
+  /// 計算最常出現的區間型態（連續2-3個號碼），供「同出型態」分析
+  /// 回傳：各型態出現頻率，key = zone-combo 字串（如 "1-2" 代表 zone1+zone2 同局均有≥2球）
+  static Map<String, int> dominantZonePatterns(List<BingoRecord> records, {int limit = 40}) {
+    final profiles = drawZoneProfiles(records, limit: limit);
+    final patternCount = <String, int>{};
+    for (final p in profiles) {
+      // 找出球數≥2的區間組合（代表那幾區在同一局密集出現）
+      final hotZones = <int>[];
+      for (var z = 0; z < 8; z++) {
+        if (p[z] >= 3) hotZones.add(z);
+      }
+      if (hotZones.length >= 2) {
+        for (var i = 0; i < hotZones.length - 1; i++) {
+          final key = '${hotZones[i]}-${hotZones[i + 1]}';
+          patternCount[key] = (patternCount[key] ?? 0) + 1;
+        }
+      }
+    }
+    return patternCount;
   }
 
   // ── 計時輔助 ──────────────────────────────────────────────────

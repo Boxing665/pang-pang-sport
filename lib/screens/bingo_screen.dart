@@ -9,9 +9,9 @@ import '../services/self_learning_service.dart';
 import '../widgets/lottery_prediction_card.dart';
 
 // Top-level functions required by compute() to run on separate isolate
-// Argument: (records, strategyMode) record
-BingoPrediction _computeAnalysis((List<BingoRecord>, String) arg) =>
-    BingoService.analyze(arg.$1, seed: 0, strategyMode: arg.$2);
+// Argument: (records, strategyMode, zoneMultipliers)
+BingoPrediction _computeAnalysis((List<BingoRecord>, String, Map<int, double>) arg) =>
+    BingoService.analyze(arg.$1, seed: 0, strategyMode: arg.$2, zoneMultipliers: arg.$3);
 
 
 List<AccuracySummary> _computeAccuracyIsolate(List<BingoRecord> records) =>
@@ -43,7 +43,7 @@ class _BingoScreenState extends State<BingoScreen>
   bool _alerted = false;
   int _secondsLeft = 0;
   int? _selectedBall;    // tapped ball number
-  int _tab = 0;          // 0=連帶 1=統計 2=歷史 3=準確率
+  int _tab = 0;          // 0=連帶 1=頭遺漏 2=尾遺漏 3=統計 4=歷史 5=準確率 6=同出型態 7=型態分析
   List<AccuracySummary> _accuracy = [];
   // 上一期預測對照
   PredictionLog? _lastPredLog;
@@ -90,6 +90,7 @@ class _BingoScreenState extends State<BingoScreen>
 
   // 快取上一次的分析結果：若開獎號碼未變，直接沿用不重算
   int _cachedDrawNo = -1;
+  int _lastRecordedDrawNo = -1; // 避免重複記錄區間命中
   BingoPrediction? _cachedPred;
   List<AccuracySummary> _cachedAccuracy = [];
 
@@ -109,7 +110,8 @@ class _BingoScreenState extends State<BingoScreen>
         pred = _cachedPred;
         accuracy = _cachedAccuracy;
       } else {
-        pred = await compute(_computeAnalysis, (records, bingoStrategy));
+        final zoneMultipliers = await SelfLearningService.getBingoZoneMultipliers();
+        pred = await compute(_computeAnalysis, (records, bingoStrategy, zoneMultipliers));
         if (records.length >= 22) {
           accuracy = await compute(_computeAccuracyIsolate, records);
         }
@@ -126,6 +128,23 @@ class _BingoScreenState extends State<BingoScreen>
       byDrawNo[r.drawNo] = r.numbers;
     }
     await _logSvc.autoReportBingoByDrawNo(byDrawNo);
+
+    // 將最近一局的實際結果與預測比對，供 SelfLearningService 更新區間命中率
+    if (records.isNotEmpty && _cachedPred != null) {
+      final latestActual = records.first.numbers;
+      final latestDrawNo = records.first.drawNo;
+      // 避免重複記錄：只在 drawNo 改變時記錄
+      if (_lastRecordedDrawNo != latestDrawNo) {
+        _lastRecordedDrawNo = latestDrawNo;
+        final currentStrategy = await SelfLearningService.getRecommendedBingoStrategy();
+        await SelfLearningService.recordBingoDetail(
+          drawNo:    latestDrawNo,
+          predicted: _cachedPred!.recommended + _cachedPred!.carryOverNumbers,
+          actual:    latestActual,
+          strategy:  currentStrategy,
+        );
+      }
+    }
 
     // 儲存本期預測（每次載入都更新，確保最新預測存在）
     if (pred != null) {
@@ -1219,6 +1238,8 @@ class _BingoScreenState extends State<BingoScreen>
                 _tabBtn(5, '📈 準確率'),
                 const SizedBox(width: 6),
                 _tabBtn(6, '🧩 同出/型態'),
+                const SizedBox(width: 6),
+                _tabBtn(7, '🗺️ 型態分析'),
               ],
             ),
           ),
@@ -1230,6 +1251,7 @@ class _BingoScreenState extends State<BingoScreen>
           if (_tab == 4) _historyTab(),
           if (_tab == 5) _accuracyTab(),
           if (_tab == 6) _patternTab(),
+          if (_tab == 7) _drawPatternTab(),
         ],
       ),
     );
@@ -2123,6 +2145,316 @@ class _BingoScreenState extends State<BingoScreen>
           ),
         ],
       ),
+    );
+  }
+
+  // ── 型態分析 Tab ──────────────────────────────────────────────
+
+  Widget _drawPatternTab() {
+    if (_records.length < 5) return _emptyMsg('資料不足，需要至少 5 局歷史記錄');
+    final pred = _pred!;
+
+    // 區間分布（近 20 局每區開出球數）
+    final profiles = BingoService.drawZoneProfiles(_records, limit: 20);
+    final avgDist   = BingoService.avgZoneDistribution(_records, limit: 30);
+    final patterns  = BingoService.dominantZonePatterns(_records, limit: 40);
+
+    // 最新一局各區球數
+    final latestProfile = profiles.isNotEmpty ? profiles.first : List.filled(8, 0);
+
+    // Top 共現配對（前 15 對）
+    final topPairs = pred.topPairs.take(15).toList();
+
+    const zoneLabels = ['01-10','11-20','21-30','31-40','41-50','51-60','61-70','71-80'];
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── 最新一局區間分布 ──────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white.withAlpha(10),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withAlpha(25)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('最新一局區間分布  vs  歷史平均',
+                  style: TextStyle(color: _gold, fontSize: 12, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 10),
+              ...List.generate(8, (z) {
+                final latest = latestProfile[z];
+                final avg    = avgDist[z];
+                final maxVal = 8.0;
+                final latestFrac = (latest / maxVal).clamp(0.0, 1.0);
+                final avgFrac    = (avg    / maxVal).clamp(0.0, 1.0);
+                final isHot = latest > avg + 1;
+                final isCold = latest < avg - 1;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 52,
+                        child: Text(zoneLabels[z],
+                            style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                      ),
+                      Expanded(
+                        child: Stack(children: [
+                          // avg bar (grey)
+                          FractionallySizedBox(
+                            widthFactor: avgFrac,
+                            child: Container(
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withAlpha(30),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                          ),
+                          // latest bar (coloured)
+                          FractionallySizedBox(
+                            widthFactor: latestFrac,
+                            child: Container(
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: isHot
+                                    ? _colorHot.withAlpha(200)
+                                    : isCold
+                                        ? _colorCold.withAlpha(200)
+                                        : _cyan.withAlpha(160),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                          ),
+                        ]),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 56,
+                        child: Text(
+                          '本局$latest  均${avg.toStringAsFixed(1)}',
+                          style: TextStyle(
+                            color: isHot ? _colorHot : isCold ? _cyan : Colors.white54,
+                            fontSize: 9,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              const SizedBox(height: 4),
+              Row(children: [
+                _legendItem(_colorHot, '本局>均+1'),
+                const SizedBox(width: 10),
+                _legendItem(_cyan, '本局<均-1'),
+                const SizedBox(width: 10),
+                _legendItem(Colors.white.withAlpha(80), '歷史平均'),
+              ]),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // ── 近 20 局區間熱度表 ────────────────────────────────────
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white.withAlpha(8),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withAlpha(20)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('近 ${profiles.length} 局區間熱力表（每格 = 該區開出球數）',
+                  style: const TextStyle(color: _cyan, fontSize: 11, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              // Header row
+              Row(
+                children: [
+                  const SizedBox(width: 28),
+                  ...List.generate(8, (z) => Expanded(
+                    child: Text(
+                      '${z+1}區',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white38, fontSize: 9),
+                    ),
+                  )),
+                ],
+              ),
+              const SizedBox(height: 4),
+              ...profiles.asMap().entries.map((e) {
+                final idx = e.key;
+                final p   = e.value;
+                final drawNo = idx < _records.length ? _records[idx].drawNo : 0;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 28,
+                        child: Text(
+                          idx == 0 ? '最新' : '$drawNo',
+                          style: TextStyle(
+                            color: idx == 0 ? _gold : Colors.white24,
+                            fontSize: 8,
+                          ),
+                        ),
+                      ),
+                      ...List.generate(8, (z) {
+                        final cnt = p[z];
+                        final intensity = cnt / 6.0;
+                        final bg = cnt == 0
+                            ? Colors.white.withAlpha(8)
+                            : Color.lerp(_colorCold, _colorHot, intensity)!.withAlpha(180);
+                        return Expanded(
+                          child: Container(
+                            margin: const EdgeInsets.symmetric(horizontal: 1),
+                            height: 18,
+                            decoration: BoxDecoration(
+                              color: bg,
+                              borderRadius: BorderRadius.circular(3),
+                            ),
+                            alignment: Alignment.center,
+                            child: Text(
+                              '$cnt',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                color: cnt == 0 ? Colors.white24 : Colors.white,
+                              ),
+                            ),
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+                );
+              }),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // ── 常見區間組合型態 ──────────────────────────────────────
+        if (patterns.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.white.withAlpha(8),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.white.withAlpha(20)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('常見密集出現區間組合（≥3球/區）',
+                    style: TextStyle(color: _gold, fontSize: 12, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                ...(patterns.entries.toList()
+                    ..sort((a, b) => b.value.compareTo(a.value)))
+                    .take(8)
+                    .map((e) {
+                  final parts = e.key.split('-');
+                  final za = int.tryParse(parts[0]) ?? 0;
+                  final zb = int.tryParse(parts[1]) ?? 0;
+                  final labelA = za < 8 ? zoneLabels[za] : '?';
+                  final labelB = zb < 8 ? zoneLabels[zb] : '?';
+                  final maxCount = patterns.values.reduce((a, b) => a > b ? a : b);
+                  final frac = e.value / maxCount;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Row(children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.purpleAccent.withAlpha(40),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.purpleAccent.withAlpha(80)),
+                        ),
+                        child: Text('$labelA + $labelB',
+                            style: const TextStyle(color: Colors.purpleAccent, fontSize: 10)),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: frac.clamp(0.0, 1.0),
+                            minHeight: 8,
+                            backgroundColor: Colors.white.withAlpha(15),
+                            valueColor: const AlwaysStoppedAnimation(Colors.purpleAccent),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text('${e.value} 次',
+                          style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                    ]),
+                  );
+                }),
+              ],
+            ),
+          ),
+
+        const SizedBox(height: 12),
+
+        // ── 最強共現配對（前 15 對）──────────────────────────────
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white.withAlpha(8),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white.withAlpha(20)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('最強共現配對  ·  共分析 ${pred.analyzedDraws} 局',
+                  style: const TextStyle(color: _gold, fontSize: 12, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 8),
+              if (topPairs.isEmpty)
+                const Text('資料不足', style: TextStyle(color: Colors.white38, fontSize: 11))
+              else
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: topPairs.map((p) {
+                    final pct = (p.rate * 100).round();
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Colors.indigo.withAlpha(50),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: Colors.indigoAccent.withAlpha(100)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _pairBall(p.a),
+                          const SizedBox(width: 3),
+                          const Text('+', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                          const SizedBox(width: 3),
+                          _pairBall(p.b),
+                          const SizedBox(width: 6),
+                          Text('$pct%',
+                              style: const TextStyle(color: Colors.indigoAccent, fontSize: 10,
+                                  fontWeight: FontWeight.w700)),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 

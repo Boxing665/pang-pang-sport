@@ -444,6 +444,8 @@ class SelfLearningService {
   //      | 'transition'（轉移矩陣）| 'balanced'（綜合）
 
   static const _bingoStrategies = ['balanced', 'frequency', 'gap', 'transition'];
+  static const _bingoZoneKey    = 'sl_bingo_zone_v1';   // 區間命中率
+  static const _bingoHitListKey = 'sl_bingo_hitlist_v1'; // 每局命中數列表
 
   /// 記錄賓果策略命中情況（hitCount = 本次預測有幾個號碼中獎）
   static Future<void> recordBingoStrategy(
@@ -460,6 +462,108 @@ class SelfLearningService {
     if (hist.length > _strategyWindow) hist.removeAt(0);
     data[strategyUsed] = hist;
     await prefs.setString(_bingoStratKey, jsonEncode(data));
+  }
+
+  /// 記錄賓果詳細命中（含區間統計），由 BingoScreen 在開獎後呼叫
+  static Future<void> recordBingoDetail({
+    required int drawNo,
+    required List<int> predicted,
+    required List<int> actual,
+    required String strategy,
+  }) async {
+    final hitCount = predicted.where((n) => actual.contains(n)).length;
+    await recordBingoStrategy(strategy, hitCount);
+
+    final prefs = await SharedPreferences.getInstance();
+
+    // ── 區間命中統計（zone 0–7：每區 10 個號碼）──────────────────
+    final zoneRaw  = prefs.getString(_bingoZoneKey);
+    final zoneData = zoneRaw != null
+        ? Map<String, dynamic>.from(jsonDecode(zoneRaw) as Map)
+        : <String, dynamic>{};
+    for (var z = 0; z < 8; z++) {
+      final zStart = z * 10 + 1;
+      final zEnd   = z * 10 + 10;
+      final predInZone = predicted.where((n) => n >= zStart && n <= zEnd).length;
+      final hitInZone  = predicted.where((n) => n >= zStart && n <= zEnd && actual.contains(n)).length;
+      final List<int> zh = ((zoneData['z$z'] as List?)?.cast<int>()) ?? [];
+      zh.add(predInZone > 0 && hitInZone > 0 ? 1 : (predInZone == 0 ? -1 : 0));
+      if (zh.length > 30) zh.removeAt(0);
+      zoneData['z$z'] = zh;
+    }
+    await prefs.setString(_bingoZoneKey, jsonEncode(zoneData));
+
+    // ── 每局命中數列表（供圖表趨勢顯示）────────────────────────────
+    final hlRaw  = prefs.getString(_bingoHitListKey);
+    final hlData = hlRaw != null
+        ? Map<String, dynamic>.from(jsonDecode(hlRaw) as Map)
+        : <String, dynamic>{};
+    final List<int> hitList = ((hlData['hits'] as List?)?.cast<int>()) ?? [];
+    hitList.add(hitCount);
+    if (hitList.length > 50) hitList.removeAt(0);
+    hlData['hits'] = hitList;
+    hlData['lastDrawNo'] = drawNo;
+    await prefs.setString(_bingoHitListKey, jsonEncode(hlData));
+  }
+
+  /// 取得各區間命中乘數（zone 0–7 → 0.85–1.20），供 BingoService 調整評分
+  static Future<Map<int, double>> getBingoZoneMultipliers() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_bingoZoneKey);
+    if (raw == null) return {};
+    final data = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    final result = <int, double>{};
+    for (var z = 0; z < 8; z++) {
+      final hist = ((data['z$z'] as List?)?.cast<int>())
+          ?.where((v) => v >= 0) // 排除 -1（未預測該區）
+          .toList() ?? [];
+      if (hist.length < 5) continue;
+      final rate = hist.reduce((a, b) => a + b) / hist.length;
+      result[z] = (0.85 + rate * 0.35).clamp(0.85, 1.20);
+    }
+    return result;
+  }
+
+  /// 取得近期賓果每局命中數列表（最新在後，最多 50 局）
+  static Future<({List<int> hits, double avgHits})> getBingoHitHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_bingoHitListKey);
+    if (raw == null) return (hits: <int>[], avgHits: 0.0);
+    final data  = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    final hits  = List<int>.from((data['hits'] as List?) ?? <int>[]);
+    if (hits.isEmpty) return (hits: hits, avgHits: 0.0);
+    final avg = hits.reduce((a, b) => a + b) / hits.length;
+    return (hits: hits, avgHits: avg);
+  }
+
+  /// 取得各策略近期命中率（供圖表顯示），key=strategyName, value=rate 0.0-1.0
+  static Future<Map<String, double>> getBingoStrategyRates() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw   = prefs.getString(_bingoStratKey);
+    if (raw == null) return {};
+    final data  = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+    final result = <String, double>{};
+    for (final s in _bingoStrategies) {
+      final hist = ((data[s] as List?)?.cast<int>()) ?? [];
+      if (hist.isEmpty) continue;
+      result[s] = hist.reduce((a, b) => a + b) / hist.length;
+    }
+    return result;
+  }
+
+  /// 強制切換至下一個賓果策略（使用者手動觸發或命中率長期低落）
+  static Future<String> forceNextBingoStrategy() async {
+    final current = await getRecommendedBingoStrategy();
+    final prefs   = await SharedPreferences.getInstance();
+    final raw     = prefs.getString(_bingoStratKey);
+    final data    = raw != null
+        ? Map<String, dynamic>.from(jsonDecode(raw) as Map)
+        : <String, dynamic>{};
+    // 強制壓低當前策略分數以觸發切換
+    data[current] = <int>[0, 0, 0, 0, 0];
+    await prefs.setString(_bingoStratKey, jsonEncode(data));
+    final idx  = _bingoStrategies.indexOf(current);
+    return _bingoStrategies[(idx + 1) % _bingoStrategies.length];
   }
 
   /// 取得建議的賓果策略名稱
