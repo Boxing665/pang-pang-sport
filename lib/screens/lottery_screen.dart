@@ -196,7 +196,6 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
   static const Color _bgMid   = Color(0xFFA52A2A);
   static const Color _bgLight = Color(0xFFC0392B);
   static const Color _gold    = Color(0xFFFFD700);
-  static const Color _goldAlt = Color(0xFFFFB800);
 
   // ── Build ──────────────────────────────────────────────────────
 

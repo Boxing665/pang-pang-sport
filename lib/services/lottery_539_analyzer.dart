@@ -242,7 +242,6 @@ class Lottery539Analyzer {
     // 计算最后出现的距离和平均间隔
     for (int i = 1; i <= 39; i++) {
       int lastDrawAgo = lookbackDays + 1;
-      int totalGap = 0;
 
       for (int j = 0; j < drawsInRange.length; j++) {
         if (drawsInRange[j].numbers.contains(i)) {
