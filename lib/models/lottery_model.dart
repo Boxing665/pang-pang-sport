@@ -1355,3 +1355,135 @@ class _NumberPartner {
   @override
   String toString() => '${number.toString().padLeft(2, '0')}($frequency次,$appearanceRate%)';
 }
+
+// ══════════════════════════════════════════════════════════════
+// 539 數據分析師：頻率統計 + 優質組合篩選器
+// ══════════════════════════════════════════════════════════════
+
+/// 一組優質組合（已通過奇偶/尾數過濾）
+class FilteredCombo {
+  const FilteredCombo({
+    required this.numbers,
+    required this.oddCount,
+    required this.evenCount,
+    required this.score,
+  });
+  final List<int> numbers;
+  final int oddCount;
+  final int evenCount;
+  final double score;
+
+  String get display => numbers.map((n) => n.toString().padLeft(2, '0')).join('  ');
+  String get oddEvenLabel => '奇$oddCount偶$evenCount';
+  String get tailDisplay => numbers.map((n) => '${n % 10}').join('/');
+}
+
+/// 539 數據分析師結果
+class Analyst539Result {
+  const Analyst539Result({
+    required this.hotTop10,
+    required this.coldTop10,
+    required this.selectedPool,
+    required this.totalCombinations,
+    required this.validCombinations,
+    required this.topCombos,
+  });
+
+  final List<({int number, int frequency})> hotTop10;
+  final List<({int number, int frequency})> coldTop10;
+  final List<int> selectedPool; // 8 numbers selected for combinations
+  final int totalCombinations;  // C(8,5) = 56
+  final int validCombinations;  // after filter
+  final List<FilteredCombo> topCombos; // top 5 best combos
+}
+
+/// 根據歷史記錄執行 Python-style 頻率分析 + 組合篩選
+Analyst539Result compute539Analysis(List<DrawRecord> records) {
+  final history = records.take(100).toList();
+  if (history.isEmpty) {
+    return const Analyst539Result(
+      hotTop10: [], coldTop10: [], selectedPool: [],
+      totalCombinations: 0, validCombinations: 0, topCombos: [],
+    );
+  }
+
+  // ── 1. 計算每個號碼出現頻率 ──────────────────────────────────
+  final freq = <int, int>{for (var n = 1; n <= 39; n++) n: 0};
+  for (final r in history) {
+    for (final n in r.numbers) {
+      if (n >= 1 && n <= 39) freq[n] = freq[n]! + 1;
+    }
+  }
+
+  // ── 2. 熱門前10 / 冷門前10 ────────────────────────────────────
+  final sorted = freq.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+  final hotTop10 = sorted.take(10).map((e) => (number: e.key, frequency: e.value)).toList();
+  final coldTop10 = sorted.reversed.take(10).toList().map((e) => (number: e.key, frequency: e.value)).toList();
+
+  // ── 3. 選出 8 個號碼組成候選池（熱5 + 冷3） ─────────────────
+  final pool = <int>[
+    ...hotTop10.take(5).map((e) => e.number),
+    ...coldTop10.take(3).map((e) => e.number),
+  ]..sort();
+
+  // ── 4. 生成所有 C(8,5) = 56 組合 ────────────────────────────
+  final allCombos = _combinations(pool, 5);
+  final totalCombinations = allCombos.length;
+
+  // ── 5. 過濾：奇偶比不能 5:0 或 0:5，尾數不能全同 ───────────
+  bool isValid(List<int> comb) {
+    final odds = comb.where((x) => x % 2 != 0).length;
+    if (odds == 0 || odds == 5) return false;
+    final tails = comb.map((x) => x % 10).toSet();
+    if (tails.length == 1) return false;
+    return true;
+  }
+
+  final validCombos = allCombos.where(isValid).toList();
+
+  // ── 6. 評分：熱門號碼越多分越高 ─────────────────────────────
+  final hotSet = hotTop10.take(5).map((e) => e.number).toSet();
+  double scoreCombo(List<int> c) {
+    double sc = 0;
+    for (final n in c) {
+      sc += (freq[n] ?? 0).toDouble();
+      if (hotSet.contains(n)) sc += 5;
+    }
+    // 奇偶均衡加分
+    final odds = c.where((x) => x % 2 != 0).length;
+    if (odds == 2 || odds == 3) sc += 3;
+    return sc;
+  }
+
+  final scored = validCombos.map((c) {
+    final odds = c.where((x) => x % 2 != 0).length;
+    return FilteredCombo(
+      numbers: c,
+      oddCount: odds,
+      evenCount: 5 - odds,
+      score: scoreCombo(c),
+    );
+  }).toList()..sort((a, b) => b.score.compareTo(a.score));
+
+  return Analyst539Result(
+    hotTop10: hotTop10,
+    coldTop10: coldTop10,
+    selectedPool: pool,
+    totalCombinations: totalCombinations,
+    validCombinations: validCombos.length,
+    topCombos: scored.take(5).toList(),
+  );
+}
+
+/// 從 items 中取出所有長度為 r 的組合
+List<List<T>> _combinations<T>(List<T> items, int r) {
+  if (r == 0) return [[]];
+  if (items.isEmpty || r > items.length) return [];
+  final result = <List<T>>[];
+  for (var i = 0; i <= items.length - r; i++) {
+    for (final rest in _combinations(items.sublist(i + 1), r - 1)) {
+      result.add([items[i], ...rest]);
+    }
+  }
+  return result;
+}

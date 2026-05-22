@@ -1422,6 +1422,10 @@ class _MatchTile extends StatelessWidget {
               ),
             ],
             if (match.sport == SportType.football) ...[
+              if (prediction != null && !isCompleted) ...[
+                const SizedBox(height: 8),
+                _MatchTile._footballScoreBadge(match: match, prediction: prediction!),
+              ],
               const SizedBox(height: 6),
               Center(
                 child: Text(
@@ -1444,6 +1448,50 @@ class _MatchTile extends StatelessWidget {
           ],
         ),
       ),
+      ),
+    );
+  }
+
+  static Widget _footballScoreBadge({required MatchFixture match, required MatchPrediction prediction}) {
+    final home = prediction.mcModeHomeScore ?? prediction.predictedHomeScore;
+    final away = prediction.mcModeAwayScore ?? prediction.predictedAwayScore;
+    final pct = (prediction.confidence * 100).round();
+    final String result;
+    if (home > away) {
+      result = '主勝';
+    } else if (away > home) {
+      result = '客勝';
+    } else {
+      result = '平局';
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppTheme.surface.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: AppTheme.primaryAccent.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Text('⚽ 推薦比分 ', style: TextStyle(fontSize: 11, color: Colors.white70)),
+          Text(
+            '$home : $away',
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: AppTheme.primaryAccent.withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              '$result  信心$pct%',
+              style: TextStyle(fontSize: 10, color: AppTheme.primaryAccent),
+            ),
+          ),
+        ],
       ),
     );
   }

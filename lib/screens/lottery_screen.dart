@@ -254,6 +254,10 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
                 if (_data != null) const SizedBox(height: 14),
                 _predictionCard(),
                 const SizedBox(height: 14),
+                if (_data != null && _data!.records539.isNotEmpty)
+                  _dataAnalystSection(),
+                if (_data != null && _data!.records539.isNotEmpty)
+                  const SizedBox(height: 14),
                 _drawnNumberInput(),
                 const SizedBox(height: 14),
                 _historySection(),
@@ -717,6 +721,147 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
         n.toString().padLeft(2, '0'),
         style: const TextStyle(
             color: _gold, fontWeight: FontWeight.w900, fontSize: 16),
+      ),
+    );
+  }
+
+  // ── 539 數據分析師 ─────────────────────────────────────────────
+
+  Widget _dataAnalystSection() {
+    final records = _data!.records539;
+    final result = compute539Analysis(records);
+    if (result.hotTop10.isEmpty) return const SizedBox();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black.withAlpha(70),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _gold.withAlpha(100), width: 1.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 標題
+          Row(children: [
+            const Icon(Icons.analytics_rounded, color: _gold, size: 18),
+            const SizedBox(width: 8),
+            const Text('539 數據分析師',
+                style: TextStyle(color: _gold, fontSize: 15, fontWeight: FontWeight.w900, letterSpacing: 1)),
+          ]),
+          const SizedBox(height: 14),
+
+          // ── 熱門號碼 Top 10 ─────────────────────────────────
+          const Text('🔥 熱門號碼（出現最多）',
+              style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6, runSpacing: 6,
+            children: result.hotTop10.asMap().entries.map((e) {
+              final rank = e.key + 1;
+              final item = e.value;
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Color.lerp(const Color(0xFFBF360C), const Color(0xFFFF6D00), e.key / 10)!.withAlpha(200),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text('$rank. ${item.number.toString().padLeft(2, '0')} (${item.frequency}次)',
+                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+
+          // ── 冷門號碼 Top 10 ─────────────────────────────────
+          const Text('❄️ 冷門號碼（出現最少）',
+              style: TextStyle(color: Color(0xFF90CAF9), fontSize: 12, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6, runSpacing: 6,
+            children: result.coldTop10.asMap().entries.map((e) {
+              final rank = e.key + 1;
+              final item = e.value;
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Color.lerp(const Color(0xFF0D47A1), const Color(0xFF1565C0), e.key / 10)!.withAlpha(200),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text('$rank. ${item.number.toString().padLeft(2, '0')} (${item.frequency}次)',
+                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+
+          // ── 候選池 8 顆 ──────────────────────────────────────
+          Row(children: [
+            const Text('🎯 候選池（熱門5+冷門3）：',
+                style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            Text(result.selectedPool.map((n) => n.toString().padLeft(2, '0')).join('  '),
+                style: const TextStyle(color: _gold, fontSize: 13, fontWeight: FontWeight.w900)),
+          ]),
+          const SizedBox(height: 4),
+          Text(
+            '共 ${result.totalCombinations} 組組合 → 過濾奇偶/尾數後剩 ${result.validCombinations} 組優質組合',
+            style: const TextStyle(color: Colors.white54, fontSize: 11),
+          ),
+          const SizedBox(height: 12),
+
+          // ── 優質推薦組合 Top 5 ───────────────────────────────
+          const Text('⭐ 優質推薦組合（評分最高）',
+              style: TextStyle(color: _gold, fontSize: 12, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 8),
+          ...result.topCombos.asMap().entries.map((e) {
+            final rank = e.key + 1;
+            final combo = e.value;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withAlpha(12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _gold.withAlpha(rank == 1 ? 120 : 50)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: rank == 1 ? _gold : Colors.white.withAlpha(30),
+                        shape: BoxShape.circle,
+                      ),
+                      alignment: Alignment.center,
+                      child: Text('$rank',
+                          style: TextStyle(
+                            color: rank == 1 ? Colors.black : Colors.white70,
+                            fontSize: 11, fontWeight: FontWeight.w900)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(combo.display,
+                          style: TextStyle(
+                            color: rank == 1 ? _gold : Colors.white,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 2,
+                          )),
+                    ),
+                    Text(combo.oddEvenLabel,
+                        style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                    const SizedBox(width: 8),
+                    Text('尾:${combo.tailDisplay}',
+                        style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                  ],
+                ),
+              ),
+            );
+          }),
+        ],
       ),
     );
   }
