@@ -1453,17 +1453,38 @@ class _MatchTile extends StatelessWidget {
   }
 
   static Widget _footballScoreBadge({required MatchFixture match, required MatchPrediction prediction}) {
-    final home = prediction.mcModeHomeScore ?? prediction.predictedHomeScore;
-    final away = prediction.mcModeAwayScore ?? prediction.predictedAwayScore;
-    final pct = (prediction.confidence * 100).round();
-    final String result;
-    if (home > away) {
-      result = '主勝';
-    } else if (away > home) {
-      result = '客勝';
+    // Use same logic as match_card.dart _footballScoreLabel: prioritise bookmaker-implied scores
+    final int home;
+    final int away;
+    if (prediction.marketHomeExp > 0 && prediction.marketAwayExp > 0 &&
+        match.odds.bookmakerName != '模型推算') {
+      home = prediction.marketHomeExp.round();
+      away = prediction.marketAwayExp.round();
     } else {
-      result = '平局';
+      home = prediction.predictedHomeScore;
+      away = prediction.predictedAwayScore;
     }
+
+    // Winner label: match _winnerLabel logic from match_card.dart
+    final odds = match.odds;
+    final String result;
+    if (odds.draw > 0 && odds.draw < 99 &&
+        odds.draw <= odds.homeWin && odds.draw <= odds.awayWin) {
+      final drawPct = (odds.fairDrawProb * 100).round().clamp(20, 65);
+      result = '平局 $drawPct%';
+    } else {
+      final homeP = odds.fairHomeProb > 0.05 ? odds.fairHomeProb : prediction.ensembleHomeWinPct;
+      final drawP = odds.fairDrawProb > 0.05 ? odds.fairDrawProb : prediction.ensembleDrawPct;
+      final awayP = odds.fairAwayProb > 0.05 ? odds.fairAwayProb : prediction.ensembleAwayWinPct;
+      if (drawP > homeP && drawP > awayP) {
+        result = '平局 ${(drawP * 100).round().clamp(20, 65)}%';
+      } else if (homeP >= awayP) {
+        result = '主勝 ${(homeP * 100).round().clamp(40, 99)}%';
+      } else {
+        result = '客勝 ${(awayP * 100).round().clamp(40, 99)}%';
+      }
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -1487,7 +1508,7 @@ class _MatchTile extends StatelessWidget {
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              '$result  信心$pct%',
+              result,
               style: TextStyle(fontSize: 10, color: AppTheme.primaryAccent),
             ),
           ),
