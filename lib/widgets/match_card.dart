@@ -263,14 +263,18 @@ class MatchCard extends StatelessWidget {
     return 'AI $aiLine$unit';
   }
 
-  /// 足球盤口推算比分：以莊家 spread + overLine 反推主客預期進球
+  /// 足球推薦比分：莊家盤口 > Poisson 矩陣眾數 > MC 融合預測
   String _footballScoreLabel(MatchFixture f, MatchPrediction p) {
-    // 有真實莊家盤口時，直接用 marketHomeExp / marketAwayExp（已由 spread+overLine 解出）
+    // 1. 有真實莊家盤口：用 marketHomeExp/marketAwayExp（spread+overLine 反推）
     if (p.marketHomeExp > 0 && p.marketAwayExp > 0 &&
         f.odds.bookmakerName != '模型推算') {
       return '${p.marketHomeExp.round()} : ${p.marketAwayExp.round()}';
     }
-    // 無真實賭盤時退回 AI 融合預測
+    // 2. 無真實賭盤：用泊松機率矩陣眾數（argmax P(i,j)）
+    if (p.poissonModeHomeScore != null && p.poissonModeAwayScore != null) {
+      return '${p.poissonModeHomeScore} : ${p.poissonModeAwayScore}';
+    }
+    // 3. 退回 AI 融合預測
     return '${p.predictedHomeScore} : ${p.predictedAwayScore}';
   }
 

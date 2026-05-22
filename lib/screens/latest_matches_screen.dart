@@ -1453,13 +1453,16 @@ class _MatchTile extends StatelessWidget {
   }
 
   static Widget _footballScoreBadge({required MatchFixture match, required MatchPrediction prediction}) {
-    // Use same logic as match_card.dart _footballScoreLabel: prioritise bookmaker-implied scores
+    // Priority: 1. bookmaker-implied 2. Poisson matrix mode 3. AI ensemble
     final int home;
     final int away;
     if (prediction.marketHomeExp > 0 && prediction.marketAwayExp > 0 &&
         match.odds.bookmakerName != '模型推算') {
       home = prediction.marketHomeExp.round();
       away = prediction.marketAwayExp.round();
+    } else if (prediction.poissonModeHomeScore != null && prediction.poissonModeAwayScore != null) {
+      home = prediction.poissonModeHomeScore!;
+      away = prediction.poissonModeAwayScore!;
     } else {
       home = prediction.predictedHomeScore;
       away = prediction.predictedAwayScore;

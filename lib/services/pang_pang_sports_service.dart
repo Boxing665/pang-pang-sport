@@ -1176,6 +1176,30 @@ class PredictionEngine {
     // ── Step 5.7: 泊松精確分佈模型（Poisson Exact Distribution）──────
     final poisson = _poissonExact(homeLambda, awayLambda, fixture.sport);
 
+    // ── Step 5.7b: 足球：Poisson 矩陣眾數融入比分（無真實盤口時）──────
+    // 泊松矩陣眾數 argmax P(i,j) 比 MC 眾數更數學嚴謹（直接從分佈取最大值，
+    // 不受隨機 seed 干擾）。有真實莊家賠率時已由 marketHomeExp/marketAwayExp 錨定。
+    if (fixture.sport == SportType.football && !hasSpreadAndLine) {
+      final pH = poisson.mostLikelyHomeScore;
+      final pA = poisson.mostLikelyAwayScore;
+      // 60% Poisson matrix mode + 40% Monte Carlo mode（兩者互補）
+      predictedHomeScore = (pH * 0.60 + predictedHomeScore * 0.40).round().clamp(0, 7);
+      predictedAwayScore = (pA * 0.60 + predictedAwayScore * 0.40).round().clamp(0, 7);
+      // 確保勝負方向與 ensemble 機率一致
+      final ensH = mc.homeWinPct * 0.50 + poisson.homeWinProb * 0.50;
+      final ensD = mc.drawPct * 0.50 + poisson.drawProb * 0.50;
+      final ensA = mc.awayWinPct * 0.50 + poisson.awayWinProb * 0.50;
+      if (ensH > ensD + 0.04 && ensH > ensA && predictedHomeScore <= predictedAwayScore) {
+        predictedHomeScore = predictedAwayScore + 1;
+      } else if (ensA > ensD + 0.04 && ensA > ensH && predictedAwayScore <= predictedHomeScore) {
+        predictedAwayScore = predictedHomeScore + 1;
+      } else if (ensD >= ensH && ensD >= ensA && predictedHomeScore != predictedAwayScore) {
+        final g = ((predictedHomeScore + predictedAwayScore) / 2).round().clamp(0, 3);
+        predictedHomeScore = g;
+        predictedAwayScore = g;
+      }
+    }
+
     // ── Step 5.8: 勝分差機率 (僅籃球) ─────────────────────────────
     double basketballSpreadConfidence = 0.0;
     if (fixture.sport == SportType.basketball) {
@@ -1247,6 +1271,8 @@ class PredictionEngine {
       kellyAway: kellyAway,
       mcModeHomeScore: mc.modeHomeScore,
       mcModeAwayScore: mc.modeAwayScore,
+      poissonModeHomeScore: poisson.mostLikelyHomeScore,
+      poissonModeAwayScore: poisson.mostLikelyAwayScore,
       ensembleHomeWinPct: ensembleHome,
       ensembleDrawPct: ensembleDraw,
       ensembleAwayWinPct: ensembleAway,

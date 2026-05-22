@@ -16,6 +16,8 @@ class MatchPrediction {
     this.kellyAway = 0.0,
     this.mcModeHomeScore,
     this.mcModeAwayScore,
+    this.poissonModeHomeScore,
+    this.poissonModeAwayScore,
     this.ensembleHomeWinPct = 0.0,
     this.ensembleDrawPct = 0.0,
     this.ensembleAwayWinPct = 0.0,
@@ -66,6 +68,10 @@ class MatchPrediction {
   /// 蒙地卡羅模擬最高頻比分（500次中出現最多的比分）
   final int? mcModeHomeScore;
   final int? mcModeAwayScore;
+
+  /// 泊松機率矩陣眾數比分：argmax P(i,j) = Poisson(λH,i)×Poisson(λA,j)
+  final int? poissonModeHomeScore;
+  final int? poissonModeAwayScore;
 
   /// 多模型融合結果（蒙地卡羅 × 泊松精確分佈 加權平均）
   final double ensembleHomeWinPct;
