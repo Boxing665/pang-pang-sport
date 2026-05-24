@@ -661,6 +661,19 @@ class PredictionEngine {
       }
     }
 
+    // ── Step 2.4: 球隊名稱雜湊差異化 (無真實數據時防止所有比賽預測趨同) ──
+    // 當兩隊都沒有真實統計且賭盤數據非真實時，純模型計算會產生相同 lambda
+    // 用球隊名稱雜湊對 lambda 施加 ±12-24% 的確定性擾動，確保每場比賽預測不同
+    if (!fixture.homeForm.hasRealStats && !odds.isFromBookmaker) {
+      final hh = fixture.homeTeam.codeUnits.fold(0, (int a, int b) => (a * 31 + b) & 0xFFFF);
+      final ah = fixture.awayTeam.codeUnits.fold(0, (int a, int b) => (a * 31 + b) & 0xFFFF);
+      final scale = sport == SportType.basketball ? 0.12 : 0.24;
+      final homeFactor = (1.0 - scale / 2) + (hh % 10000) * scale / 10000.0;
+      final awayFactor = (1.0 - scale / 2) + (ah % 10000) * scale / 10000.0;
+      homeLambda *= homeFactor;
+      awayLambda *= awayFactor;
+    }
+
     // ── Step 2.5: 量化傷兵影響 (模擬 On-Off Court 邊際價值) ──────────
     // 使用加權削減：Out (100% 權重), Questionable (50% 權重)
     final homeInjuries = fixture.homeForm.injuries;

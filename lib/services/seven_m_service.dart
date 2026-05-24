@@ -107,7 +107,7 @@ class SevenMService {
         sport: SportType.football,
         homeForm: _defaultForm(homeTeam),
         awayForm: _defaultForm(awayTeam),
-        odds: _defaultOdds(),
+        odds: _estimateMatchOdds(homeTeam, awayTeam),
         status: MatchStatus.scheduled,
         analystNote: '',
       ));
@@ -132,25 +132,41 @@ class SevenMService {
     }
   }
 
-  TeamForm _defaultForm(String name) => TeamForm(
-    teamName: name,
-    lastFiveResults: const [],
-    averageScored: 1.4,
-    averageConceded: 1.2,
-    injuries: 0,
-    momentumScore: 0,
-    seasonRecord: '',
-    hasRealStats: false,
-  );
+  TeamForm _defaultForm(String name) {
+    final hash = name.codeUnits.fold(0, (int a, int b) => (a * 31 + b) & 0xFFFF);
+    final scoreFactor = 0.75 + (hash % 10000) / 20000.0; // [0.75, 1.25]
+    return TeamForm(
+      teamName: name,
+      lastFiveResults: const [],
+      averageScored: double.parse((1.4 * scoreFactor).toStringAsFixed(2)),
+      averageConceded: double.parse((1.2 / scoreFactor).toStringAsFixed(2)),
+      injuries: 0,
+      momentumScore: ((hash % 16) - 3).toDouble(), // [-3, 12]
+      seasonRecord: '',
+      hasRealStats: false,
+    );
+  }
 
-  OddsSnapshot _defaultOdds() => const OddsSnapshot(
-    homeWin: 2.0,
-    draw: 3.3,
-    awayWin: 3.5,
-    overLine: 0.0,
-    overOdds: 1.91,
-    underOdds: 1.91,
-    bookmakerName: '模型推算',
-    isFromBookmaker: false,
-  );
+  OddsSnapshot _estimateMatchOdds(String homeTeam, String awayTeam) {
+    final hh = homeTeam.codeUnits.fold(0, (int a, int b) => (a * 31 + b) & 0xFFFF);
+    final ah = awayTeam.codeUnits.fold(0, (int a, int b) => (a * 31 + b) & 0xFFFF);
+    final homeStr = 0.75 + (hh % 10000) / 20000.0;
+    final awayStr = 0.75 + (ah % 10000) / 20000.0;
+    const homeAdv = 1.12;
+    final totalStr = homeStr * homeAdv + awayStr;
+    final homeWinProb = (homeStr * homeAdv / totalStr).clamp(0.25, 0.72);
+    final awayWinProb = (awayStr / totalStr).clamp(0.20, 0.65);
+    final drawProb = (1.0 - homeWinProb - awayWinProb).clamp(0.15, 0.35);
+    const vig = 1.08;
+    return OddsSnapshot(
+      homeWin: double.parse((vig / homeWinProb).toStringAsFixed(2)),
+      draw: double.parse((vig / drawProb).toStringAsFixed(2)),
+      awayWin: double.parse((vig / awayWinProb).toStringAsFixed(2)),
+      overLine: 0.0,
+      overOdds: 1.91,
+      underOdds: 1.91,
+      bookmakerName: '模型推算',
+      isFromBookmaker: false,
+    );
+  }
 }
