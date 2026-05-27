@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 /// Firebase 身分驗證服務
 ///
@@ -63,8 +64,30 @@ class AuthService {
     }
   }
 
+  /// Google 登入
+  Future<AuthResult> signInWithGoogle() async {
+    try {
+      final googleUser = await GoogleSignIn().signIn();
+      if (googleUser == null) return AuthResult.failure('Google 登入已取消');
+      final googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+      final userCredential = await _auth.signInWithCredential(credential);
+      final user = userCredential.user!;
+      await _createUserDocument(user, displayName: user.displayName);
+      return AuthResult.success(user);
+    } on FirebaseAuthException catch (e) {
+      return AuthResult.failure(_mapAuthError(e.code));
+    } catch (e) {
+      return AuthResult.failure('Google 登入失敗，請稍後再試');
+    }
+  }
+
   /// 登出
   Future<void> signOut() async {
+    await GoogleSignIn().signOut();
     await _auth.signOut();
   }
 

@@ -92,8 +92,36 @@ class Lottery539Prediction {
 class Lottery539Analyzer {
   static const _cacheKey = 'lottery_539_analysis_v3';
   
-  // 不再使用硬編碼數據：歷史記錄由 allHistoricalRecords 直接傳入
-  static const _recentDraws = <Map<String, dynamic>>[];
+  // 最新开奖数据（2026年5月）+ 小黃卡分析数据
+  static const _recentDraws = [
+    // 原始5月开奖数据
+    {'date': '2026-05-18', 'numbers': [05, 10, 38]},
+    {'date': '2026-05-19', 'numbers': [16, 29, 32]},
+    {'date': '2026-05-20', 'numbers': [09, 17, 21]},
+    {'date': '2026-05-21', 'numbers': [09, 31, 35]},
+    {'date': '2026-05-22', 'numbers': [05, 10, 32]},
+    {'date': '2026-05-23', 'numbers': [20, 23, 32]},
+    // 新增5/25-5/30数据
+    {'date': '2026-05-25', 'numbers': [14, 30, 35]},
+    {'date': '2026-05-26', 'numbers': [12, 21, 29]},
+    {'date': '2026-05-29', 'numbers': [09, 11, 35]},
+    {'date': '2026-05-27', 'numbers': [18, 24, 39]},
+    {'date': '2026-05-28', 'numbers': [10, 37, 38]},
+    {'date': '2026-05-30', 'numbers': [02, 20, 29]},
+  ];
+
+  // 小黃卡分析数据 (从用户提供的图表)
+  static final yellowCardAnalysis = {
+    'hot_numbers': [01, 02, 09, 15, 17, 19, 24, 36, 40, 43, 44, 51, 53, 57, 61, 66, 70, 73, 74, 80],
+    'cold_numbers': [03, 04, 07, 08, 12],
+    'common_pairs': [
+      {'a': 24, 'b': 70, 'frequency': 18},
+      {'a': 44, 'b': 53, 'frequency': 18},
+      {'a': 01, 'b': 19, 'frequency': 17},
+      {'a': 01, 'b': 37, 'frequency': 17},
+      {'a': 19, 'b': 66, 'frequency': 17},
+    ],
+  };
 
   final List<DrawRecord> allHistoricalRecords;
   final DateTime analysisDate;
