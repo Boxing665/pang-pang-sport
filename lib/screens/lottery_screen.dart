@@ -10,6 +10,7 @@ import '../services/prediction_log_service.dart';
 import '../services/failure_analysis_service.dart';
 import '../services/self_learning_service.dart';
 import '../widgets/lottery_prediction_card.dart';
+import '../widgets/lottery_analysis_panel.dart';
 
 /// 財神爺樂透預測頁面
 ///
@@ -298,6 +299,11 @@ class _LotteryScreenState extends State<LotteryScreen> with WidgetsBindingObserv
                 const SizedBox(height: 14),
                 if (_data != null && _data!.records539.isNotEmpty)
                   _dataAnalystSection(),
+                if (_data != null && _data!.records539.isNotEmpty)
+                  const SizedBox(height: 14),
+                // 新增：分析面板
+                if (_data != null && _data!.records539.isNotEmpty)
+                  LotteryAnalysisPanel(records: _data!.records539),
                 if (_data != null && _data!.records539.isNotEmpty)
                   const SizedBox(height: 14),
                 _drawnNumberInput(),

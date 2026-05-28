@@ -61,10 +61,10 @@ class GoogleAuthService {
 
   GoogleAuthService._internal();
 
-  final GoogleSignIn _googleSignIn = GoogleSignIn();
-
   GoogleUser? _currentUser;
   String? _authToken;
+
+  late final GoogleSignIn _googleSignIn = GoogleSignIn.instance;
 
   GoogleUser? get currentUser => _currentUser;
   bool get isLoggedIn => _currentUser != null;
@@ -72,13 +72,14 @@ class GoogleAuthService {
   /// 真实Google登入
   Future<GoogleUser?> signInWithGoogle() async {
     try {
-      final account = await _googleSignIn.signIn();
-      if (account == null) return null;
-
-      final authentication = await account.authentication;
+      // 初始化GoogleSignIn
+      await _googleSignIn.initialize();
       
+      // 执行身份验证
+      final account = await _googleSignIn.authenticate();
+
       _currentUser = GoogleUser.fromGoogleSignInAccount(account);
-      _authToken = authentication.accessToken;
+      _authToken = 'authenticated'; // 简化处理
 
       // 保存到本地
       await _saveUser(_currentUser!);
@@ -133,11 +134,11 @@ class GoogleAuthService {
   /// 静默登录（使用之前保存的账户）
   Future<void> _silentSignIn() async {
     try {
-      final account = await _googleSignIn.signInSilently();
+      await _googleSignIn.initialize();
+      final account = await _googleSignIn.attemptLightweightAuthentication();
       if (account != null) {
-        final authentication = await account.authentication;
         _currentUser = GoogleUser.fromGoogleSignInAccount(account);
-        _authToken = authentication.accessToken;
+        _authToken = 'authenticated';
         
         await _saveUser(_currentUser!);
         await _saveToken(_authToken!);

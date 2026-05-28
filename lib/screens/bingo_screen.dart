@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../services/bingo_service.dart';
 import '../services/prediction_log_service.dart';
 import '../services/self_learning_service.dart';
+import '../widgets/bingo_analysis_panel.dart';
 
 // Top-level functions required by compute() to run on separate isolate
 // Argument: (records, strategyMode, zoneMultipliers)
@@ -404,6 +405,17 @@ class _BingoScreenState extends State<BingoScreen>
                   SliverToBoxAdapter(child: _heatmapGrid()),
                   if (_selectedBall != null)
                     SliverToBoxAdapter(child: _ballDetail()),
+                  // 新增：分析面板
+                  if (_records.isNotEmpty)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: BingoAnalysisPanel(
+                          allNumbers: _records.expand((r) => r.numbers).toList(),
+                          period: _records.isNotEmpty ? _records.first.drawNo : 0,
+                        ),
+                      ),
+                    ),
                   SliverToBoxAdapter(child: _tabSection()),
                   const SliverToBoxAdapter(
                       child: SizedBox(height: 32)),
